@@ -1,0 +1,30 @@
+# Binaries
+llmrouter
+*.exe
+
+# Models (large files)
+models/*.onnx
+
+# Environment
+.env
+.env.*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# Go
+vendor/
+
+# Python training
+training/__pycache__/
+training/*.pt
+training/*.onnx
+training/data/
+
+# Docker
+docker-compose.override.yaml
