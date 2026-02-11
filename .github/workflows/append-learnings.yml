@@ -1,0 +1,73 @@
+name: Append Learnings
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  append:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build learnings entry from PR body
+        id: build
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Extract a markdown section by heading name.
+            // Accepts variations like:
+            //   ## Additional Notes:
+            //   ## Additional Notes (optional):
+            //   ## How It Works:
+            // Terminates at the next markdown heading (## ...) or EOF.
+            function section(name, body) {
+              const re = new RegExp(
+                String.raw`(?:^|\n)#{1,6}\s*` +                // heading start
+                name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') +   // escaped name
+                String.raw`(?:\s*\(.*?\))?\s*:\s*` +            // optional (parenthetical):
+                String.raw`([\s\S]*?)` +                        // capture body lazily
+                String.raw`(?=\n#{1,6}\s|$)`,                   // until next heading or end
+                'i'
+              );
+              const m = body.match(re);
+              return m ? m[1].replace(/\r/g, '').trim() : '';
+            }
+
+            const pr   = context.payload.pull_request;
+            const body = pr.body || '';
+
+            const changeSummary = section('Change Summary', body);
+            const howItWorks    = section('How It Works', body);
+            const notes         = section('Additional Notes', body); // will match "(optional)" too
+
+            if (!changeSummary && !howItWorks && !notes) {
+              core.setOutput('should_update', 'false');
+              return;
+            }
+
+            const today  = new Date().toISOString().slice(0,10); // YYYY-MM-DD
+            const header = `## ${today} - PR #${pr.number}: ${pr.title}`;
+
+            let entry = `${header}\n\n`;
+            if (changeSummary) entry += `**Change Summary:**\n${changeSummary}\n\n`;
+            if (howItWorks)    entry += `**How It Works:**\n${howItWorks}\n\n`;
+            if (notes)         entry += `**Additional Notes:**\n${notes}\n\n`;
+
+            core.setOutput('should_update', 'true');
+            core.setOutput('entry', entry);
+
+      - name: Append to LEARNINGS.md
+        if: steps.build.outputs.should_update == 'true'
+        run: |
+          touch LEARNINGS.md
+          printf "\n%s" "${{ steps.build.outputs.entry }}" >> LEARNINGS.md
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add LEARNINGS.md
+          git commit -m "docs: append learnings from PR #${{ github.event.pull_request.number }}"
+          git push
