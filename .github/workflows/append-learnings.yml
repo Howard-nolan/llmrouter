@@ -63,9 +63,11 @@ jobs:
 
       - name: Append to LEARNINGS.md
         if: steps.build.outputs.should_update == 'true'
+        env:
+          ENTRY: ${{ steps.build.outputs.entry }}
         run: |
           touch LEARNINGS.md
-          printf "\n%s" "${{ steps.build.outputs.entry }}" >> LEARNINGS.md
+          printf "\n%s" "$ENTRY" >> LEARNINGS.md
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add LEARNINGS.md
