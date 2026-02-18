@@ -3,7 +3,7 @@ CLAUDE.md
 .claude/
 
 # Binaries
-llmrouter
+/llmrouter
 *.exe
 
 # Models (large files)
