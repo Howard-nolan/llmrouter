@@ -30,3 +30,23 @@ Fixes a bug where the `append-learnings.yml` workflow was stripping all backtick
 - This is a common GitHub Actions security/correctness gotcha — direct `${{ }}` interpolation in `run:` blocks is also a shell injection vector (e.g., a malicious PR title could execute arbitrary commands). Using `env:` is the recommended safe pattern.
 - This covers a fix discovered during Week 1. No new features; purely a bug fix to existing CI infrastructure.
 
+
+## 2026-02-18 - PR #3: Scaffold directory structure, Makefile, and docker-compose
+
+**Change Summary:**
+Completes the remaining scaffolding from Week 1's first task. Creates the full `cmd/` and `internal/` directory structure, a `Makefile` for common dev workflows, and a `docker-compose.yaml` with Redis and Prometheus for the local dev stack.
+
+**How It Works:**
+- `cmd/llmrouter/main.go` is the gateway entry point (`package main` with an empty `func main()`). Go names the compiled binary after this directory, so `go build ./cmd/llmrouter` produces a `llmrouter` binary.
+- Eight `internal/` package stubs (`config`, `server`, `provider`, `cache`, `embedder`, `router`, `stream`, `metrics`) each contain a single `.go` file with a `package` declaration and GoDoc comment. These are real Go packages (not `.gitkeep` placeholders) so `go build ./...` and `go test ./...` recognize them immediately.
+- `Makefile` provides six targets: `build`, `test` (with `-race` flag for data race detection), `lint`, `run`, `docker-up`, and `docker-down`. All targets are declared `.PHONY` so `make` always runs them regardless of filesystem state.
+- `docker-compose.yaml` defines two services: Redis (`redis:7-alpine`, port 6379, with a named volume for data persistence and a healthcheck) and Prometheus (`prom/prometheus:v3.2.0`, port 9090, mounting `prometheus.yml` read-only). Grafana is commented out for Week 7.
+- `prometheus.yml` configures a 15-second scrape interval targeting `host.docker.internal:8080` — the gateway's `/metrics` endpoint. `host.docker.internal` resolves to the host machine from inside Docker, since the gateway runs outside the container.
+- `.gitignore` fix: changed `llmrouter` to `/llmrouter` (leading slash anchors to repo root) so it only ignores the compiled binary, not the `cmd/llmrouter/` directory.
+
+**Additional Notes:**
+- This completes the first task of Week 1 ("Scaffold repo: `go mod init`, directory structure, Makefile, docker-compose"). `go mod init` was done in PR #1; this PR covers the rest.
+- Image versions are pinned (`redis:7-alpine`, `prom/prometheus:v3.2.0`) for reproducibility.
+- The `extra_hosts` directive in docker-compose ensures `host.docker.internal` resolves correctly on Linux too (it already works on macOS Docker Desktop by default).
+- No Go implementation code yet — the stub files exist so the Go toolchain recognizes each package and so `go build ./...` / `go test ./...` work from day one.
+
