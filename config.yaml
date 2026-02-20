@@ -1,0 +1,12 @@
+server:
+  port: 8080
+  read_timeout: 30s
+  write_timeout: 120s
+
+providers:
+  google:
+    api_key: ${GOOGLE_API_KEY}
+    base_url: https://generativelanguage.googleapis.com/v1beta
+    models:
+      - gemini-2.5-pro
+      - gemini-2.0-flash
