@@ -50,3 +50,29 @@ Completes the remaining scaffolding from Week 1's first task. Creates the full `
 - The `extra_hosts` directive in docker-compose ensures `host.docker.internal` resolves correctly on Linux too (it already works on macOS Docker Desktop by default).
 - No Go implementation code yet — the stub files exist so the Go toolchain recognizes each package and so `go build ./...` / `go test ./...` work from day one.
 
+
+## 2026-02-20 - PR #4: Implement config loading with koanf and godotenv
+
+**Change Summary:**
+- Add `config.yaml` with minimal Week 1 config (server settings + Google provider)
+- Implement `internal/config/` package with typed config structs and a `Load()` function using koanf
+- Add `.env` support via godotenv for local API key management
+
+**How It Works:**
+`config.Load(path)` loads configuration in three layers, each overriding the previous:
+1. **YAML file** — parsed via koanf's file provider + YAML parser into a flat key-value map
+2. **Environment variable overrides** — any `LLMROUTER_`-prefixed env var maps to a config key (e.g., `LLMROUTER_SERVER_PORT` → `server.port`)
+3. **`${VAR}` placeholder expansion** — after unmarshaling, provider API keys containing `${VAR_NAME}` are resolved via `os.Getenv`
+
+Before all of this, `godotenv.Load()` reads the `.env` file (if present) into the process environment, so API keys set there are available for both layers 2 and 3.
+
+Config structs: `Config` (top-level) → `ServerConfig` (port, timeouts) + `map[string]ProviderConfig` (API key, base URL, models list).
+
+Tests verify YAML loading with `${VAR}` expansion and `LLMROUTER_` env var overrides.
+
+**Additional Notes:**
+- Week 1 task: "Implement `internal/config/` — load YAML via koanf, env var interpolation for API keys"
+- Config is intentionally minimal — only `server` and `providers.google` sections. Cache, embedding, routing, and metrics config will be added in later weeks as those features are built.
+- `.env` file is already in `.gitignore` (added in PR #3)
+- Dependencies added: koanf/v2, koanf providers (file, env, yaml), godotenv, testify
+
