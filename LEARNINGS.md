@@ -76,3 +76,27 @@ Tests verify YAML loading with `${VAR}` expansion and `LLMROUTER_` env var overr
 - `.env` file is already in `.gitignore` (added in PR #3)
 - Dependencies added: koanf/v2, koanf providers (file, env, yaml), godotenv, testify
 
+
+## 2026-02-21 - PR #5: Implement chi server, provider interface, and Google adapter
+
+**Change Summary:**
+- Add HTTP server package (`internal/server/`) with chi router, `/health` endpoint, and `/v1/chat/completions` handler
+- Define `Provider` interface and unified request/response types (`ChatRequest`, `ChatResponse`, `StreamChunk`) in `internal/provider/provider.go`
+- Implement Google Gemini adapter (`internal/provider/google.go`) with non-streaming `ChatCompletion` — translates unified format to/from Gemini's API format
+- Wire everything together in `main.go`: config → provider → server → http.Server with timeouts
+
+**How It Works:**
+Request flows through: `main.go (http.Server)` → `server.go (chi router + middleware)` → `handler.go (decode JSON into ChatRequest)` → `google.go (translate to Gemini format, POST to generateContent, translate response back)` → `handler.go (return JSON)`.
+
+The **Server struct** pattern holds the router, config, and provider as fields — handlers are methods on the struct so they access dependencies via `s.provider`, `s.cfg`, etc. This scales cleanly as more dependencies are added (cache, embedder, metrics).
+
+The **Provider interface** defines three methods: `Name()`, `ChatCompletion()`, `ChatCompletionStream()`. The Google adapter implements non-streaming completions with full request translation (system messages → `systemInstruction`, `assistant` role → `model`, `max_tokens` → `generationConfig.maxOutputTokens`). Streaming returns a stub error for now.
+
+Key Go patterns used: dependency injection (http.Client passed to provider), `context.Context` for cancellation propagation, `defer` for response body cleanup, `fmt.Errorf` with `%w` for error wrapping.
+
+**Additional Notes:**
+- **Week 1 progress:** This covers the server, provider interface, and Google adapter (non-streaming) tasks. Still remaining: streaming `ChatCompletionStream`, `internal/stream/` SSE writer, and end-to-end streaming test.
+- **Streaming deferred to next PR:** The `ChatCompletionStream` method is stubbed. Implementing it involves goroutines, channel patterns, and SSE parsing which warrant their own focused PR.
+- **Tested manually:** Ran the server locally, hit `/health` (200 OK) and `/v1/chat/completions` (successfully reached Gemini API — got 429 rate limit on free tier, confirming the full request pipeline works).
+- Chi is added as a dependency (`go-chi/chi/v5`).
+
