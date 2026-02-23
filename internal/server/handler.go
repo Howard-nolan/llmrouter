@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/howard-nolan/llmrouter/internal/provider"
+	"github.com/howard-nolan/llmrouter/internal/stream"
 )
 
 // handleHealth responds with a simple JSON status indicating the server
@@ -53,20 +54,29 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Step 2: For now, only handle non-streaming requests.
+	// Step 2: Branch on streaming vs non-streaming.
 	if req.Stream {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotImplemented)
-		json.NewEncoder(w).Encode(map[string]string{
-			"error": "streaming not implemented yet",
-		})
+		// Get the chunk channel from the provider.
+		chunks, err := s.provider.ChatCompletionStream(r.Context(), &req)
+		if err != nil {
+			log.Printf("provider stream error: %v", err)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadGateway)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error": "provider error: " + err.Error(),
+			})
+			return
+		}
+
+		// Write SSE events to the client. This blocks until the
+		// channel closes (stream complete) or an error occurs.
+		if err := stream.Write(w, chunks); err != nil {
+			log.Printf("stream write error: %v", err)
+		}
 		return
 	}
 
-	// Step 3: Call the provider's non-streaming method.
-	// r.Context() gets the request's context — it automatically cancels
-	// if the client disconnects. We pass it through so the provider's
-	// HTTP call to Gemini will also be cancelled.
+	// Non-streaming path.
 	resp, err := s.provider.ChatCompletion(r.Context(), &req)
 	if err != nil {
 		log.Printf("provider error: %v", err)
@@ -78,9 +88,6 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Step 4: Return the response as JSON.
-	// For now we return our internal format directly. Later we'll
-	// translate this into the full OpenAI response shape.
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }

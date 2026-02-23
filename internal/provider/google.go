@@ -1,11 +1,13 @@
 package provider
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 )
 
 // ---------------------------------------------------------------------------
@@ -261,12 +263,217 @@ func (g *GoogleProvider) ChatCompletion(ctx context.Context, req *ChatRequest) (
 }
 
 // ---------------------------------------------------------------------------
-// Streaming: ChatCompletionStream (to be implemented next)
+// Streaming: ChatCompletionStream
 // ---------------------------------------------------------------------------
 
 // ChatCompletionStream sends a streaming request to Gemini's
 // streamGenerateContent endpoint and returns a channel of StreamChunks.
+//
+// The flow:
+//  1. Translate request (same as non-streaming)
+//  2. POST to streamGenerateContent?alt=sse (instead of generateContent)
+//  3. Spin up a goroutine that reads SSE lines from the response body
+//  4. Return the channel immediately — the caller reads chunks from it
+//
+// The goroutine + channel pattern here is like returning a ReadableStream
+// in Node.js. The caller doesn't wait for the full response — they get
+// chunks as they arrive.
 func (g *GoogleProvider) ChatCompletionStream(ctx context.Context, req *ChatRequest) (<-chan StreamChunk, error) {
-	// TODO: implement streaming
-	return nil, fmt.Errorf("streaming not implemented yet")
+	// Step 1: Translate request (reuse the same translation as non-streaming).
+	geminiReq := toGeminiRequest(req)
+
+	body, err := json.Marshal(geminiReq)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling request: %w", err)
+	}
+
+	// Step 2: Build the HTTP request to the STREAMING endpoint.
+	// Note the different path: streamGenerateContent instead of generateContent.
+	// The ?alt=sse query parameter tells Gemini to return Server-Sent Events
+	// instead of a single JSON blob.
+	url := fmt.Sprintf("%s/models/%s:streamGenerateContent?alt=sse&key=%s",
+		g.baseURL, req.Model, g.apiKey,
+	)
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	// Step 3: Make the HTTP call.
+	// Unlike the non-streaming path, we do NOT defer Body.Close() here.
+	// The response body stays open — it's a long-lived stream. The
+	// goroutine we launch below will close it when it's done reading.
+	httpResp, err := g.client.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("sending request to gemini: %w", err)
+	}
+
+	// Check for HTTP errors BEFORE we start the goroutine.
+	// If the API returned an error (like 401 or 429), we want to report
+	// it immediately, not inside the goroutine where it's harder to
+	// surface to the caller.
+	if httpResp.StatusCode != http.StatusOK {
+		defer httpResp.Body.Close()
+		var errBody map[string]any
+		json.NewDecoder(httpResp.Body).Decode(&errBody)
+		return nil, fmt.Errorf("gemini API error (status %d): %v",
+			httpResp.StatusCode, errBody,
+		)
+	}
+
+	// Step 4: Create the channel and launch the goroutine.
+	//
+	// make(chan StreamChunk) creates an UNBUFFERED channel — sending
+	// blocks until someone receives. This provides natural backpressure:
+	// the goroutine won't read the next SSE event until the handler has
+	// consumed the current chunk (like a pipe in Node streams with
+	// highWaterMark=1).
+	//
+	// We could use a buffered channel like make(chan StreamChunk, 10) to
+	// let the goroutine read ahead, but unbuffered is simpler and keeps
+	// memory predictable.
+	ch := make(chan StreamChunk)
+
+	// go func() { ... }() launches an anonymous function as a goroutine.
+	// This is Go's concurrency primitive — it's like calling an async
+	// function that runs concurrently but without the await syntax.
+	//
+	// Think of it as: (async () => { /* runs in background */ })()
+	// except it's truly concurrent (not just async I/O), and we
+	// communicate results via the channel instead of resolving a promise.
+	go func() {
+		// defer runs when this goroutine exits (for any reason).
+		// We MUST close both the channel and the response body.
+		//
+		// Closing the channel signals to the consumer (the handler)
+		// that no more chunks are coming. A for-range loop over a
+		// channel exits automatically when the channel is closed.
+		// If we forgot to close it, the handler would block forever
+		// waiting for more chunks — a goroutine leak.
+		defer close(ch)
+		defer httpResp.Body.Close()
+
+		// bufio.NewScanner wraps the response body in a line scanner.
+		// scanner.Scan() reads one line at a time (up to \n), returning
+		// true if a line was read, false on EOF or error.
+		//
+		// This is like readline.createInterface({ input: stream })
+		// in Node.js, where you'd do: rl.on('line', (line) => {...})
+		scanner := bufio.NewScanner(httpResp.Body)
+
+		for scanner.Scan() {
+			line := scanner.Text()
+
+			// SSE format sends lines like:
+			//   data: {"candidates":[...]}\n
+			//   \n
+			//   data: {"candidates":[...]}\n
+			//   \n
+			//
+			// Blank lines separate events. Lines without the "data: "
+			// prefix are either blank separators or SSE comments (lines
+			// starting with ":") — we skip them.
+			if !strings.HasPrefix(line, "data: ") {
+				continue
+			}
+
+			// Strip the "data: " prefix to get the raw JSON.
+			// strings.TrimPrefix returns the string unchanged if the
+			// prefix isn't present (but we already checked with HasPrefix).
+			jsonData := strings.TrimPrefix(line, "data: ")
+
+			// Decode the JSON into the same geminiResponse struct we
+			// use for non-streaming. Gemini sends the same structure
+			// for each SSE event — the only difference is each event
+			// contains just one token/chunk of text instead of the
+			// full response.
+			var geminiResp geminiResponse
+			if err := json.Unmarshal([]byte(jsonData), &geminiResp); err != nil {
+				// If we can't parse a line, send an error chunk and stop.
+				// The Done: true tells the consumer this stream is over.
+				ch <- StreamChunk{
+					Done:  true,
+					Error: fmt.Errorf("decoding gemini stream event: %w", err),
+				}
+				return
+			}
+
+			// Extract the text delta from the response.
+			// Same structure as non-streaming: candidates[0].content.parts[0].text
+			if len(geminiResp.Candidates) == 0 {
+				continue
+			}
+			candidate := geminiResp.Candidates[0]
+
+			var delta string
+			if len(candidate.Content.Parts) > 0 {
+				delta = candidate.Content.Parts[0].Text
+			}
+
+			// Build the StreamChunk.
+			chunk := StreamChunk{
+				Model: req.Model,
+				Delta: delta,
+			}
+
+			// Check if this is the final chunk. Gemini sets finishReason
+			// to "STOP" (or other values like "MAX_TOKENS") on the last
+			// candidate. An empty finishReason means more chunks are coming.
+			if candidate.FinishReason != "" {
+				chunk.Done = true
+
+				// Usage metadata is typically included in the final event.
+				if geminiResp.UsageMetadata != nil {
+					chunk.Usage = &Usage{
+						PromptTokens:     geminiResp.UsageMetadata.PromptTokenCount,
+						CompletionTokens: geminiResp.UsageMetadata.CandidatesTokenCount,
+						TotalTokens:      geminiResp.UsageMetadata.TotalTokenCount,
+					}
+				}
+			}
+
+			// Send the chunk on the channel. This blocks until the
+			// consumer reads it (unbuffered channel = synchronous handoff).
+			//
+			// The select statement lets us also check if the context
+			// was cancelled. select is like Promise.race() — it waits
+			// for whichever case happens first.
+			//
+			// Without this select, if the client disconnects, we'd keep
+			// reading from Gemini and trying to send on the channel with
+			// nobody listening — wasting resources.
+			select {
+			case ch <- chunk:
+				// Chunk sent successfully, continue to next line.
+			case <-ctx.Done():
+				// Context cancelled (client disconnected or timeout).
+				// ctx.Done() returns a channel that gets closed when
+				// the context is cancelled. When it closes, this case
+				// fires. We just return, which triggers the deferred
+				// close(ch) and httpResp.Body.Close().
+				return
+			}
+		}
+
+		// If the scanner stopped due to an I/O error (not just EOF),
+		// surface it. scanner.Err() returns nil on clean EOF.
+		if err := scanner.Err(); err != nil {
+			// Only send if context isn't cancelled (avoid sending on
+			// a channel nobody is reading).
+			select {
+			case ch <- StreamChunk{
+				Done:  true,
+				Error: fmt.Errorf("reading gemini stream: %w", err),
+			}:
+			case <-ctx.Done():
+			}
+		}
+	}()
+
+	// Return the channel immediately. The goroutine is now running in
+	// the background, reading from Gemini and sending chunks. The caller
+	// will do: for chunk := range ch { /* process each chunk */ }
+	return ch, nil
 }
