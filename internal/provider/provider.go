@@ -97,4 +97,16 @@ type StreamChunk struct {
 	// token counts at the end of a stream). It's a pointer so it can be
 	// nil on all non-final chunks — like TypeScript's `usage?: Usage`.
 	Usage *Usage
+
+	// Error carries any error that occurred mid-stream. Since the
+	// ChatCompletionStream method returns the channel before the stream
+	// is fully read, errors that happen DURING streaming (bad JSON from
+	// the provider, network drop, etc.) can't be returned normally.
+	// Instead, the goroutine sends a final chunk with Done: true and
+	// Error set. The consumer checks this field and handles it.
+	//
+	// This is like emitting an 'error' event on a Node.js ReadableStream.
+	// In Go, there's no event system — the channel IS the stream, so we
+	// pack the error into the data flowing through it.
+	Error error
 }
