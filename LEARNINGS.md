@@ -100,3 +100,30 @@ Key Go patterns used: dependency injection (http.Client passed to provider), `co
 - **Tested manually:** Ran the server locally, hit `/health` (200 OK) and `/v1/chat/completions` (successfully reached Gemini API — got 429 rate limit on free tier, confirming the full request pipeline works).
 - Chi is added as a dependency (`go-chi/chi/v5`).
 
+
+## 2026-02-23 - PR #6: Implement SSE streaming for Google Gemini provider
+
+**Change Summary:**
+- Add `ChatCompletionStream` to Google adapter: goroutine reads SSE lines from Gemini's `streamGenerateContent?alt=sse` endpoint, parses JSON, and sends `StreamChunk` values on an unbuffered channel with context cancellation support
+- Implement SSE writer (`stream.Write`): consumes the chunk channel, translates to OpenAI-compatible `data: {json}\n\n` format, flushes each event in real-time, sends `[DONE]` sentinel
+- Wire streaming path into `handleChatCompletions`: branches on `req.Stream`, calls provider, pipes channel to SSE writer
+- Add `Error` field to `StreamChunk` for mid-stream error propagation through the channel
+
+**How It Works:**
+**Data flow:** Client POST (stream:true) → handler → `GoogleProvider.ChatCompletionStream()` → goroutine reads Gemini SSE body line-by-line via `bufio.Scanner` → sends `StreamChunk` on unbuffered channel → `stream.Write()` consumes channel → builds `sseChunk` JSON (OpenAI format with `choices[].delta.content`, `finish_reason`, `usage`) → writes `data: {json}\n\n` to `http.ResponseWriter` → `http.Flusher.Flush()` pushes to client → `data: [DONE]\n\n` on completion.
+
+**Key patterns:**
+- Goroutine + unbuffered channel for natural backpressure (producer blocks until consumer reads)
+- `select` with `ctx.Done()` for cancellation when client disconnects
+- `defer close(ch)` + `defer httpResp.Body.Close()` for cleanup
+- Edge case: Gemini sometimes sends content + finishReason in the same SSE event — the writer splits this into two OpenAI events (content first, then finish with empty delta)
+
+**Tests:** 4 unit tests for `stream.Write` covering: normal multi-chunk flow with headers/content/usage, Gemini combined content+finish edge case, mid-stream error handling, and raw SSE wire format validation.
+
+**Additional Notes:**
+- Completes the remaining Week 1 tasks: streaming in `google.go`, SSE writer in `stream.go`, end-to-end curl test, and unit tests
+- Added `gemini-2.5-flash` to config.yaml models list (used for dev/testing since it's free tier)
+- `config.yaml` change is unrelated to streaming — just adding a model we discovered works well during testing
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
