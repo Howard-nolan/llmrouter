@@ -127,3 +127,24 @@ Key Go patterns used: dependency injection (http.Client passed to provider), `co
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
+
+## 2026-02-26 - PR #7: Add Anthropic provider request translation
+
+**Change Summary:**
+- Add `AnthropicProvider` struct, constructor, and `Name()` method — same dependency-injection pattern as `GoogleProvider`
+- Implement `toAnthropicRequest` to translate our unified `ChatRequest` into Anthropic's Messages API format
+- Define Anthropic-specific request types (`anthropicRequest`, `anthropicMessage`)
+
+**How It Works:**
+The translation function `toAnthropicRequest` handles three key differences between our unified format and Anthropic's API:
+1. **System messages** — pulled out of the messages array into a top-level `system` string field (multiple system messages joined with newlines)
+2. **Role passthrough** — unlike Google (which maps "assistant" → "model"), Anthropic uses the same "user"/"assistant" roles as OpenAI, so no mapping needed
+3. **Required `max_tokens`** — Anthropic rejects requests without it, so we default to 1024 when the caller doesn't specify
+
+Structs: `anthropicRequest` puts `model` in the request body (vs Gemini which puts it in the URL path). `anthropicMessage` is flat role+content (vs Gemini's nested `contents[].parts[]` structure).
+
+**Additional Notes:**
+- This is the first piece of Week 2 (Multi-Provider Support). Only the request translation is included — `ChatCompletion` (non-streaming) and `ChatCompletionStream` (streaming SSE parser) are follow-ups.
+- The Anthropic SSE streaming parser will be more complex than Google's due to Anthropic's multi-event-type protocol (`message_start`, `content_block_delta`, `message_delta`, etc.).
+- Response types are deferred until the non-streaming and streaming implementations are built.
+
