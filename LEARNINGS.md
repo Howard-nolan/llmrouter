@@ -148,3 +148,26 @@ Structs: `anthropicRequest` puts `model` in the request body (vs Gemini which pu
 - The Anthropic SSE streaming parser will be more complex than Google's due to Anthropic's multi-event-type protocol (`message_start`, `content_block_delta`, `message_delta`, etc.).
 - Response types are deferred until the non-streaming and streaming implementations are built.
 
+
+## 2026-02-27 - PR #8: Implement Anthropic adapter and multi-provider registry
+
+**Change Summary:**
+- **Full Anthropic adapter**: request translation (system message extraction, required `max_tokens`), non-streaming `ChatCompletion` (response types, `x-api-key` + `anthropic-version` headers), and streaming `ChatCompletionStream` (multi-event-type SSE parser for `message_start`, `content_block_delta`, `message_delta`, `message_stop`)
+- **Provider registry**: replaced single-provider `Server` with a `map[string]provider.Provider` keyed by model name, built at startup from config using a factory pattern. Handler resolves provider via O(1) map lookup on `req.Model`
+- **Response headers**: `X-LLMRouter-Provider` and `X-LLMRouter-Model` set on every response. Anthropic config added to `config.yaml`
+
+**How It Works:**
+**Anthropic non-streaming**: `toAnthropicRequest()` translates unified `ChatRequest` → Anthropic format (system as top-level string, roles passthrough, `max_tokens` default 1024). `ChatCompletion()` POSTs to `{baseURL}/messages` with `x-api-key` and `anthropic-version: 2023-06-01` headers. Response decoded into `anthropicResponse` (content blocks array with typed blocks), first `type: "text"` block extracted, usage mapped (`input_tokens`/`output_tokens` → unified `Usage`, `TotalTokens` computed since Anthropic doesn't return it).
+
+**Anthropic streaming**: same endpoint with `"stream": true` in body (unlike Gemini which uses a different URL). Goroutine reads SSE via `bufio.Scanner`, skips `event:` lines and only processes `data:` lines. Uses a single `anthropicStreamEvent` wrapper struct (discriminated union pattern — all possible fields as pointers, switch on `Type`). Metadata accumulated across events: `message_start` → ID/model/input tokens, `content_block_delta` → text chunks sent on channel, `message_delta` → output tokens, `message_stop` → final Done chunk with assembled usage. Same backpressure (unbuffered channel) and cancellation (`select` with `ctx.Done()`) patterns as the Google adapter.
+
+**Provider registry**: `main.go` defines a `map[string]providerFactory` (factory functions per provider name), iterates `cfg.Providers`, constructs each provider, then registers every model from that provider's config list into a `map[string]provider.Provider`. `server.New()` takes this map. `handler.go` calls `resolveProvider(req.Model)` which does a map lookup and returns 400 for unknown models.
+
+**Additional Notes:**
+- This completes the first 3 tasks of Week 2 (Anthropic adapter, provider registry, response headers). Error handling (429 retry/backoff) and integration tests (go-vcr fixtures) remain.
+- Anthropic API version is pinned via `anthropicAPIVersion = "2023-06-01"` constant, as noted in the risk mitigation plan.
+- The streaming parser ignores `event:` lines entirely — the `"type"` field inside each `data:` JSON payload carries the same information, avoiding inter-line state tracking.
+- Provider registry keys by model name (not provider name) for O(1) handler dispatch. Tradeoff: slightly larger map, but with ~5 models it's negligible.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
