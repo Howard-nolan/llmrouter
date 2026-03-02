@@ -1,7 +1,9 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -9,6 +11,36 @@ import (
 	"github.com/howard-nolan/llmrouter/internal/provider"
 	"github.com/howard-nolan/llmrouter/internal/stream"
 )
+
+// writeProviderError writes a JSON error response with an HTTP status code
+// derived from the error type. Maps ProviderError status codes to appropriate
+// gateway responses; falls back to 502 for unrecognized errors.
+func writeProviderError(w http.ResponseWriter, err error) {
+	log.Printf("provider error: %v", err)
+
+	status := http.StatusBadGateway // default for unknown errors
+
+	var provErr *provider.ProviderError
+	if errors.As(err, &provErr) {
+		switch {
+		case provErr.StatusCode == http.StatusTooManyRequests:
+			status = http.StatusTooManyRequests
+		case provErr.StatusCode >= 500:
+			status = http.StatusBadGateway
+		default:
+			// 401, 403, 400 from provider = our upstream config is wrong
+			status = http.StatusBadGateway
+		}
+	} else if errors.Is(err, context.DeadlineExceeded) {
+		status = http.StatusGatewayTimeout
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]string{
+		"error": err.Error(),
+	})
+}
 
 // resolveProvider looks up the Provider for a given model name using the
 // model-to-provider registry. Returns an error if the model isn't known.
@@ -93,15 +125,19 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-LLMRouter-Model", req.Model)
 
 	// Step 4: Branch on streaming vs non-streaming.
+	// Both paths use Retry to automatically retry retryable errors
+	// (429, 5xx) with exponential backoff.
+	const maxRetries = 3
+
 	if req.Stream {
-		chunks, err := p.ChatCompletionStream(r.Context(), &req)
+		var chunks <-chan provider.StreamChunk
+		err := provider.Retry(r.Context(), maxRetries, func() error {
+			var callErr error
+			chunks, callErr = p.ChatCompletionStream(r.Context(), &req)
+			return callErr
+		})
 		if err != nil {
-			log.Printf("provider stream error: %v", err)
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusBadGateway)
-			json.NewEncoder(w).Encode(map[string]string{
-				"error": "provider error: " + err.Error(),
-			})
+			writeProviderError(w, err)
 			return
 		}
 
@@ -112,14 +148,14 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Non-streaming path.
-	resp, err := p.ChatCompletion(r.Context(), &req)
+	var resp *provider.ChatResponse
+	err = provider.Retry(r.Context(), maxRetries, func() error {
+		var callErr error
+		resp, callErr = p.ChatCompletion(r.Context(), &req)
+		return callErr
+	})
 	if err != nil {
-		log.Printf("provider error: %v", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		json.NewEncoder(w).Encode(map[string]string{
-			"error": "provider error: " + err.Error(),
-		})
+		writeProviderError(w, err)
 		return
 	}
 
