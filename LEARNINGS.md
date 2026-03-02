@@ -171,3 +171,20 @@ Structs: `anthropicRequest` puts `model` in the request body (vs Gemini which pu
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
+
+## 2026-03-02 - PR #9: Add error handling with retry/backoff and typed provider errors
+
+**Change Summary:**
+- Introduce `ProviderError` structured error type that carries upstream HTTP status, provider name, retryable flag, and `Retry-After` duration — replacing opaque `fmt.Errorf` strings from both provider adapters.
+- Add `Retry()` function with exponential backoff + jitter for transient failures (429 rate limit, 5xx server errors). Respects `Retry-After` headers and context cancellation.
+- Update handler to map `ProviderError` to appropriate gateway HTTP status codes (429 pass-through, 502 for upstream errors, 504 for timeouts) instead of always returning 502.
+- Replace `http.DefaultClient` with a shared client with 120s timeout as a safety net against hung provider connections.
+
+**How It Works:**
+Provider adapters (`google.go`, `anthropic.go`) now call `NewProviderError(name, httpResp)` on non-2xx responses, which reads the error body, classifies retryability via `isRetryable()`, and parses the `Retry-After` header. The handler wraps provider calls in `Retry(ctx, 3, func() error { ... })` using a closure pattern — the closure captures the result variable from the outer scope so `Retry` only needs a `func() error` signature regardless of the provider method's return type. `backoffDelay()` computes exponential delays (1s → 2s → 4s) with 0–500ms random jitter and uses `Retry-After` as a floor. The handler's `writeProviderError()` uses `errors.As` to unwrap `ProviderError` and map its status code to the appropriate gateway response.
+
+**Additional Notes:**
+- Covers the "Error handling" task from Week 2 of the implementation plan. Integration tests (go-vcr fixtures) remain as the final Week 2 task.
+- 15 unit tests added for `ProviderError`, `Retry`, `isRetryable`, `parseRetryAfter`, and `backoffDelay`. Tests that exercise real backoff sleeps are bounded to `maxAttempts=2` to keep the suite fast (~3s).
+- The shared HTTP client timeout (120s) matches the server's `write_timeout` — it's a safety net, not a tight deadline. The request context provides per-request cancellation.
+
