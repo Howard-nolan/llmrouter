@@ -262,11 +262,7 @@ func (a *AnthropicProvider) ChatCompletion(ctx context.Context, req *ChatRequest
 	defer httpResp.Body.Close()
 
 	if httpResp.StatusCode != http.StatusOK {
-		var errBody map[string]any
-		json.NewDecoder(httpResp.Body).Decode(&errBody)
-		return nil, fmt.Errorf("anthropic API error (status %d): %v",
-			httpResp.StatusCode, errBody,
-		)
+		return nil, NewProviderError("anthropic", httpResp)
 	}
 
 	// Step 5: Decode the JSON response.
@@ -357,11 +353,7 @@ func (a *AnthropicProvider) ChatCompletionStream(ctx context.Context, req *ChatR
 
 	if httpResp.StatusCode != http.StatusOK {
 		defer httpResp.Body.Close()
-		var errBody map[string]any
-		json.NewDecoder(httpResp.Body).Decode(&errBody)
-		return nil, fmt.Errorf("anthropic API error (status %d): %v",
-			httpResp.StatusCode, errBody,
-		)
+		return nil, NewProviderError("anthropic", httpResp)
 	}
 
 	// Step 4: Create channel and launch the goroutine.

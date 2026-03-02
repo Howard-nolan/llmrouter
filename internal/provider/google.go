@@ -214,14 +214,9 @@ func (g *GoogleProvider) ChatCompletion(ctx context.Context, req *ChatRequest) (
 	// read and closed.
 	defer httpResp.Body.Close()
 
-	// Step 5: Check for HTTP errors.
+	// Check for HTTP errors.
 	if httpResp.StatusCode != http.StatusOK {
-		// Read the error body for debugging info.
-		var errBody map[string]any
-		json.NewDecoder(httpResp.Body).Decode(&errBody)
-		return nil, fmt.Errorf("gemini API error (status %d): %v",
-			httpResp.StatusCode, errBody,
-		)
+		return nil, NewProviderError("google", httpResp)
 	}
 
 	// Step 6: Decode the JSON response into our Gemini response struct.
@@ -310,17 +305,10 @@ func (g *GoogleProvider) ChatCompletionStream(ctx context.Context, req *ChatRequ
 		return nil, fmt.Errorf("sending request to gemini: %w", err)
 	}
 
-	// Check for HTTP errors BEFORE we start the goroutine.
-	// If the API returned an error (like 401 or 429), we want to report
-	// it immediately, not inside the goroutine where it's harder to
-	// surface to the caller.
+	// Check for HTTP errors before launching the goroutine.
 	if httpResp.StatusCode != http.StatusOK {
 		defer httpResp.Body.Close()
-		var errBody map[string]any
-		json.NewDecoder(httpResp.Body).Decode(&errBody)
-		return nil, fmt.Errorf("gemini API error (status %d): %v",
-			httpResp.StatusCode, errBody,
-		)
+		return nil, NewProviderError("google", httpResp)
 	}
 
 	// Step 4: Create the channel and launch the goroutine.

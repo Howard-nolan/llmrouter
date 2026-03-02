@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/howard-nolan/llmrouter/internal/config"
 	"github.com/howard-nolan/llmrouter/internal/provider"
@@ -34,14 +35,19 @@ func main() {
 	// the constructor in the map so you can call it later with the
 	// right config values. It's like a Map<string, (key, url) => Provider>
 	// in TypeScript.
+	// Shared HTTP client for all provider calls. The 120s timeout is a
+	// safety net matching the server's write_timeout — the request context
+	// enforces tighter per-request deadlines.
+	httpClient := &http.Client{Timeout: 120 * time.Second}
+
 	type providerFactory func(apiKey, baseURL string) provider.Provider
 
 	constructors := map[string]providerFactory{
 		"google": func(apiKey, baseURL string) provider.Provider {
-			return provider.NewGoogleProvider(apiKey, baseURL, http.DefaultClient)
+			return provider.NewGoogleProvider(apiKey, baseURL, httpClient)
 		},
 		"anthropic": func(apiKey, baseURL string) provider.Provider {
-			return provider.NewAnthropicProvider(apiKey, baseURL, http.DefaultClient)
+			return provider.NewAnthropicProvider(apiKey, baseURL, httpClient)
 		},
 	}
 
