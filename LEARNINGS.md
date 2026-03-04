@@ -188,3 +188,23 @@ Provider adapters (`google.go`, `anthropic.go`) now call `NewProviderError(name,
 - 15 unit tests added for `ProviderError`, `Retry`, `isRetryable`, `parseRetryAfter`, and `backoffDelay`. Tests that exercise real backoff sleeps are bounded to `maxAttempts=2` to keep the suite fast (~3s).
 - The shared HTTP client timeout (120s) matches the server's `write_timeout` — it's a safety net, not a tight deadline. The request context provides per-request cancellation.
 
+
+## 2026-03-04 - PR #10: Add integration tests with go-vcr HTTP fixtures
+
+**Change Summary:**
+- Added integration tests for both Google and Anthropic provider adapters using go-vcr v4 with hand-crafted cassette fixtures
+- Tests cover 4 paths per provider: non-streaming success, streaming success, HTTP error classification (429/401/500), and malformed response handling (Google only)
+- No real API calls needed — cassettes replay recorded HTTP responses via go-vcr's `http.RoundTripper` implementation injected into the existing `*http.Client` dependency
+
+**How It Works:**
+- `helpers_test.go` provides `newReplayClient(t, cassetteName)` which creates an `*http.Client` backed by go-vcr in `ModeReplayOnly`. The recorder implements `http.RoundTripper` and is set as the client's `Transport`, intercepting all HTTP calls and replaying responses from YAML cassette files in `testdata/cassettes/`.
+- A custom `MatcherFunc` matching only on Method + URL is used instead of go-vcr's default matcher (which checks all request fields) since our cassettes are hand-crafted rather than recorded.
+- `google_test.go` tests: non-streaming ChatCompletion (verifies Gemini response field translation), streaming ChatCompletionStream (verifies SSE parsing including the content+finishReason-in-same-event edge case), table-driven HTTP errors (429 retryable, 401 non-retryable, 500 retryable via ProviderError), and malformed response (200 with invalid JSON → parse error, not ProviderError).
+- `anthropic_test.go` tests: non-streaming ChatCompletion (verifies response ID passthrough, input_tokens/output_tokens translation, computed TotalTokens), streaming ChatCompletionStream (verifies multi-event SSE parsing across message_start/content_block_delta/message_delta/message_stop, plus correct skipping of ping/content_block_start/content_block_stop events), and table-driven HTTP errors.
+- 11 cassette YAML files model real API response shapes for both providers including SSE streaming bodies.
+
+**Additional Notes:**
+- Completes the final Week 2 task: "Integration tests with both providers (use recorded HTTP fixtures via go-vcr)"
+- Cassettes are hand-crafted from API documentation rather than recorded from live calls — no API keys needed to run tests
+- Key Go learning: variable shadowing (naming a parameter `cassette` shadowed the imported `cassette` package), `t.Cleanup` vs `defer` in test helpers, go-vcr's strict default matcher requiring all 15+ request fields to match
+
