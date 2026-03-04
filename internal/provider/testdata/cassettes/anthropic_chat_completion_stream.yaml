@@ -1,0 +1,23 @@
+---
+version: 2
+interactions:
+  - id: 0
+    request:
+      body: '{"model":"claude-haiku-4-5-20251001","max_tokens":1024,"messages":[{"role":"user","content":"What is the capital of France?"}],"stream":true}'
+      form: {}
+      headers:
+        Content-Type:
+          - application/json
+        X-Api-Key:
+          - fake-api-key
+        Anthropic-Version:
+          - "2023-06-01"
+      method: POST
+      url: https://api.anthropic.com/v1/messages
+    response:
+      body: "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_01XFDUDYJgAACzvnptvVoYEL\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"claude-haiku-4-5-20251001\",\"stop_reason\":null,\"usage\":{\"input_tokens\":15,\"output_tokens\":0}}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: ping\ndata: {\"type\":\"ping\"}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"The capital\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\" of France is Paris.\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":9}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+      code: 200
+      headers:
+        Content-Type:
+          - text/event-stream
+      duration: 0s

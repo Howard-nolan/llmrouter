@@ -1,0 +1,19 @@
+---
+version: 2
+interactions:
+  - id: 0
+    request:
+      body: '{"contents":[{"role":"user","parts":[{"text":"Hello"}]}]}'
+      form: {}
+      headers:
+        Content-Type:
+          - application/json
+      method: POST
+      url: https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=fake-api-key
+    response:
+      body: '{"error":{"code":429,"message":"Resource has been exhausted","status":"RESOURCE_EXHAUSTED"}}'
+      code: 429
+      headers:
+        Content-Type:
+          - application/json; charset=UTF-8
+      duration: 0s
