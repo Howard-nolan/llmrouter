@@ -1,0 +1,23 @@
+---
+version: 2
+interactions:
+  - id: 0
+    request:
+      body: '{"model":"claude-haiku-4-5-20251001","max_tokens":1024,"messages":[{"role":"user","content":"What is the capital of France?"}]}'
+      form: {}
+      headers:
+        Content-Type:
+          - application/json
+        X-Api-Key:
+          - fake-api-key
+        Anthropic-Version:
+          - "2023-06-01"
+      method: POST
+      url: https://api.anthropic.com/v1/messages
+    response:
+      body: '{"id":"msg_01XFDUDYJgAACzvnptvVoYEL","type":"message","role":"assistant","content":[{"type":"text","text":"The capital of France is Paris."}],"model":"claude-haiku-4-5-20251001","stop_reason":"end_turn","usage":{"input_tokens":15,"output_tokens":9}}'
+      code: 200
+      headers:
+        Content-Type:
+          - application/json
+      duration: 0s
