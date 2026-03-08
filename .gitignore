@@ -6,8 +6,8 @@ CLAUDE.md
 /llmrouter
 *.exe
 
-# Models (large files)
-models/*.onnx
+# Models (large, downloadable/reproducible)
+models/
 
 # Environment
 .env
