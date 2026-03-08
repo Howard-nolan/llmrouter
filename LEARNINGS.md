@@ -208,3 +208,20 @@ Provider adapters (`google.go`, `anthropic.go`) now call `NewProviderError(name,
 - Cassettes are hand-crafted from API documentation rather than recorded from live calls — no API keys needed to run tests
 - Key Go learning: variable shadowing (naming a parameter `cassette` shadowed the imported `cassette` package), `t.Cleanup` vs `defer` in test helpers, go-vcr's strict default matcher requiring all 15+ request fields to match
 
+
+## 2026-03-08 - PR #11: Add embedder dependencies for ONNX inference pipeline
+
+**Change Summary:**
+- Install `daulet/tokenizers` v1.25.0 (HuggingFace Rust tokenizer via CGo) and `yalue/onnxruntime_go` v1.27.0 (ONNX Runtime C++ wrapper via CGo) as dependencies for the embedding pipeline
+- Update `.gitignore` to exclude the entire `models/` directory (previously only `models/*.onnx`) since the ONNX export now produces multiple artifacts: `model.onnx`, `tokenizer.json`, `config.json`, `vocab.txt`, etc.
+
+**How It Works:**
+- `daulet/tokenizers` loads `models/tokenizer.json` at runtime to tokenize input text into `input_ids` and `attention_mask` tensors — same HuggingFace Rust tokenizer core used in Python, ensuring identical token IDs
+- `yalue/onnxruntime_go` loads `models/model.onnx` (all-MiniLM-L6-v2) and runs inference to produce 384-dimensional embedding vectors
+- Both are CGo packages: `tokenizers` statically links pre-built Rust binaries at compile time; `onnxruntime_go` dynamically loads the ONNX Runtime shared library (`.dylib`/`.so`) at runtime via `SetSharedLibraryPath()`
+
+**Additional Notes:**
+- Week 3 (Embedding Pipeline + Cache Infrastructure) — this PR covers dependency installation only. The `internal/embedder/embedder.go` implementation (tokenize → ONNX inference → mean pooling → 384-dim vector) is next
+- Both packages currently show as `// indirect` in `go.mod` since no Go code imports them yet — they'll become direct deps once `embedder.go` is implemented
+- ONNX Runtime deployment note added to Week 9 plan: `libonnxruntime.so` must be present at runtime on Linux (dynamically loaded, not bundled in Go binary)
+
