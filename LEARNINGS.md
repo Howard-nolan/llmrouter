@@ -225,3 +225,33 @@ Provider adapters (`google.go`, `anthropic.go`) now call `NewProviderError(name,
 - Both packages currently show as `// indirect` in `go.mod` since no Go code imports them yet — they'll become direct deps once `embedder.go` is implemented
 - ONNX Runtime deployment note added to Week 9 plan: `libonnxruntime.so` must be present at runtime on Linux (dynamically loaded, not bundled in Go binary)
 
+
+## 2026-03-09 - PR #12: Implement embedder with ONNX inference and HuggingFace tokenizer
+
+**Change Summary:**
+- Implement `internal/embedder/embedder.go` — the `Embedder` struct that converts text into 384-dim sentence embeddings using the all-MiniLM-L6-v2 ONNX model
+- Add 4 unit tests including Python reference value verification, determinism, discrimination, and empty input handling
+- Add `lib/` to `.gitignore` for platform-specific shared libraries (ONNX Runtime `.dylib`/`.so` and tokenizer `.a`)
+- Add `CGO_LDFLAGS` to Makefile so `make test` and `make build` find `libtokenizers.a` automatically
+
+**How It Works:**
+The embedder pipeline has three stages, all running in-process (no Python sidecar):
+
+1. **Tokenize** — `daulet/tokenizers` loads `tokenizer.json` (HuggingFace Rust tokenizer via CGo). Calling `EncodeWithOptions(text, true, WithReturnAttentionMask())` produces padded token IDs (128 tokens) and an attention mask (1 for real tokens, 0 for padding). The `tokenizer.json` has padding and truncation config baked in.
+
+2. **ONNX inference** — `yalue/onnxruntime_go` loads `model.onnx` into a `DynamicAdvancedSession`. Token IDs and attention mask are converted to `int64` tensors (shape `[1, 128]`) and fed through the model.
+
+3. **Output** — The model's `sentence_embedding` output (shape `[1, 384]`) is already mean-pooled and L2-normalized, matching Python `sentence-transformers` output exactly. We copy the result into a Go-managed `[]float32` before destroying the C-allocated tensor.
+
+Key types:
+- `Embedder` struct — holds the tokenizer, ONNX session, and embedding dimension
+- `New(modelPath, tokenizerPath, libraryPath, dimension)` — one-time setup (loads ONNX Runtime, tokenizer, creates session)
+- `Embed(text) ([]float32, error)` — per-request inference (~5-20ms on CPU)
+- `Close()` — releases C/C++ resources (tokenizer, session, ONNX environment)
+
+**Additional Notes:**
+- **Week 3 of project plan** — this completes the embedder task. Cache layer (Redis storage + semantic lookup) is next.
+- **Build requirements**: Two native libraries must be in `lib/`: `libonnxruntime.dylib` (downloaded from Microsoft's ONNX Runtime releases, ~33MB) and `libtokenizers.a` (downloaded from `daulet/tokenizers` releases, ~37MB). Both are platform-specific and gitignored.
+- **Key discovery during implementation**: The ONNX model's `sentence_embedding` output includes mean pooling + L2 normalization in the computation graph itself. Our first attempt used the `token_embeddings` output with manual mean pooling, which produced wrong results because we weren't handling the attention mask correctly (padding tokens were treated as real input). Using `sentence_embedding` is simpler and produces exact parity with Python.
+- **Attention mask bug**: The Go tokenizer respects `tokenizer.json`'s padding config and returns 128 tokens. Our initial code set `attentionMask[i] = 1` for all 128 positions, corrupting the embedding. Fix: use `EncodeWithOptions` with `WithReturnAttentionMask()` to get the correct mask from the tokenizer.
+
