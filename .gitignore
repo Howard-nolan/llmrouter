@@ -21,6 +21,9 @@ models/
 # OS
 .DS_Store
 
+# Shared libraries (ONNX Runtime, downloaded per-platform)
+lib/
+
 # Go
 vendor/
 
