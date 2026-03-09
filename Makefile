@@ -1,5 +1,10 @@
 .PHONY: build test lint run docker-up docker-down
 
+# Tell the linker where to find libtokenizers.a (CGo static library for the
+# HuggingFace tokenizer). This is needed at compile time for any target that
+# builds the embedder package.
+export CGO_LDFLAGS := -L$(CURDIR)/lib
+
 ## Build the gateway binary into the repo root.
 build:
 	go build ./cmd/llmrouter
