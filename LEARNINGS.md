@@ -255,3 +255,26 @@ Key types:
 - **Key discovery during implementation**: The ONNX model's `sentence_embedding` output includes mean pooling + L2 normalization in the computation graph itself. Our first attempt used the `token_embeddings` output with manual mean pooling, which produced wrong results because we weren't handling the attention mask correctly (padding tokens were treated as real input). Using `sentence_embedding` is simpler and produces exact parity with Python.
 - **Attention mask bug**: The Go tokenizer respects `tokenizer.json`'s padding config and returns 128 tokens. Our initial code set `attentionMask[i] = 1` for all 128 positions, corrupting the embedding. Fix: use `EncodeWithOptions` with `WithReturnAttentionMask()` to get the correct mask from the tokenizer.
 
+
+## 2026-03-13 - PR #13: Implement semantic cache interface and Redis backend
+
+**Change Summary:**
+- Add `Cache` interface in `cache.go` with five methods: `Lookup`, `Store`, `Stats`, `Flush`, `Close` — the technology-agnostic contract for semantic response caching.
+- Add `RedisCache` implementation in `redis.go` combining storage (Redis hashes) and semantic similarity lookup (brute-force cosine scan with SIMD acceleration) in a single struct.
+- Add dependencies: `redis/go-redis/v9` for Redis client, `viterin/vek` for SIMD-accelerated vector dot product.
+
+**How It Works:**
+- **Storage:** Each cache entry is a Redis hash (`cache:{sha256(embedding)}`) with fields for the embedding bytes, JSON-serialized response, created_at timestamp, and hit_count. A sorted set (`cache:index`) tracks all entries by timestamp for efficient eviction.
+- **Lookup (two-pass):** First pass reads all embeddings from Redis and computes cosine similarity via `vek32.Dot` (dot product works as cosine similarity because embeddings are L2-normalized by the embedder). Second pass fetches the full response only for the best match if it exceeds the configurable similarity threshold.
+- **Store (pipelined):** Uses a Redis pipeline to batch 3 commands (HSet, Expire, ZAdd) into a single round-trip. After storing, checks entry count and evicts oldest entries via `ZPopMin` if over `MaxEntries`.
+- **Serialization helpers:** `embeddingToBytes`/`bytesToEmbedding` convert between `[]float32` and `[]byte` using `math.Float32bits` + little-endian binary encoding (384-dim embedding = 1,536 bytes).
+- **Stats:** Hit/miss counters use `sync/atomic` for safe concurrent access. Entry count reads from the sorted set cardinality.
+
+**Additional Notes:**
+- This is Week 3 of the project plan — cache interface and Redis backend. The original plan had separate `redis.go` and `semantic.go` files, but they were combined because the similarity scan is inseparable from the storage layer (it reads stored embeddings).
+- Tests are deferred to a follow-up — will use `miniredis` (pure-Go in-memory Redis) so no Docker dependency needed for CI.
+- `CacheConfig` still needs to be wired into the main `Config` struct in `config.go` and `config.yaml` — also a follow-up task.
+- The `similaritySum` field uses `int64` with `math.Float64bits` for atomic access to a float64 — a known Go pattern since `sync/atomic` doesn't have `AddFloat64`.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
