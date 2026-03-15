@@ -4,6 +4,61 @@ An LLM inference gateway in Go with semantic response caching, cost-aware model 
 
 I document what I learn from each pull request in [**LEARNINGS.md**](./LEARNINGS.md).
 
+**Status:** In progress. Core gateway, provider adapters, streaming, embedder, and semantic cache layer are implemented. Up next: cache integration into the request lifecycle, complexity classifier, and full Prometheus instrumentation.
+
+---
+
+## Architecture
+
+```mermaid
+flowchart LR
+    Client([Client])
+
+    subgraph Gateway["llmrouter"]
+        direction TB
+        Middleware[Middleware\nlogging · auth · rate limit]
+        Embedder[Embedder\nall-MiniLM-L6-v2 · ONNX]
+        Cache[(Redis Cache\nsemantic similarity)]
+        Classifier[Complexity\nClassifier\nONNX MLP]
+        Router[Router\ncost-aware\nmodel selection]
+        Stream[SSE Stream\ntee + buffer]
+        Metrics[Metrics\nPrometheus]
+    end
+
+    subgraph Providers["LLM Providers"]
+        Gemini[Google Gemini]
+        Claude[Anthropic Claude]
+    end
+
+    Prometheus[(Prometheus)]
+    Grafana[Grafana]
+
+    Client -->|POST /v1/chat/completions| Middleware
+    Middleware --> Embedder
+    Embedder --> Cache
+
+    Cache -->|hit| Client
+    Cache -->|miss| Classifier
+    Classifier --> Router
+    Router --> Gemini
+    Router --> Claude
+    Gemini --> Stream
+    Claude --> Stream
+    Stream -->|tokens| Client
+    Stream -->|buffered response| Cache
+
+    Metrics --> Prometheus
+    Prometheus --> Grafana
+```
+
+**Request lifecycle:**
+1. Client sends a request to the unified `/v1/chat/completions` endpoint.
+2. Embedder computes a 384-dim embedding of the prompt via in-process ONNX inference.
+3. Cache layer searches Redis for semantically similar cached responses (SIMD-accelerated cosine similarity).
+4. **Cache hit** → return stored response immediately.
+5. **Cache miss** → complexity classifier scores the prompt → router selects provider/model → adapter translates the request → streams response to client while buffering for cache write.
+6. Metrics emitted at every stage.
+
 ---
 
 ## At a glance
