@@ -12,20 +12,28 @@ I document what I learn from each pull request in [**LEARNINGS.md**](./LEARNINGS
 
 ---
 
+## At a glance
+
+- Unified `/v1/chat/completions` endpoint proxying Google Gemini and Anthropic Claude
+- Semantic caching via in-process ONNX embeddings + Redis cosine similarity search
+- Cost-aware routing: classifies prompt complexity, picks cheap or expensive model accordingly
+- Full SSE streaming with tee-based cache write-through
+- Prometheus metrics: request rates, TTFT, inter-token latency, cache hit ratio, cost tracking
+
+---
+
 ## Architecture
 
 ```mermaid
 flowchart TD
-    Client([Client]) -->|POST /v1/chat/completions| Middleware
-    Middleware[Middleware] --> Embedder
+    Client([Client]) -->|POST /v1/chat/completions| Embedder
     Embedder[Embedder · ONNX] --> Cache
     Cache[(Redis Cache)] -->|hit| Response
     Cache -->|miss| Classifier
-    Classifier[Complexity Classifier] --> Router
-    Router[Router] --> Gemini[Google Gemini]
-    Router --> Claude[Anthropic Claude]
-    Gemini --> Stream[SSE Stream]
-    Claude --> Stream
+    Classifier[Complexity Classifier] -->|simple| Cheap[Cheap Model]
+    Classifier -->|complex| Quality[Quality Model]
+    Cheap --> Stream[SSE Stream]
+    Quality --> Stream
     Stream -->|tokens| Response([Response])
     Stream -->|buffer| Cache
 ```
@@ -35,18 +43,9 @@ flowchart TD
 2. Embedder computes a 384-dim embedding of the prompt via in-process ONNX inference.
 3. Cache layer searches Redis for semantically similar cached responses (SIMD-accelerated cosine similarity).
 4. **Cache hit** → return stored response immediately.
-5. **Cache miss** → complexity classifier scores the prompt → router selects provider/model → adapter translates the request → streams response to client while buffering for cache write.
-6. Metrics emitted at every stage.
-
----
-
-## At a glance
-
-- Reverse proxy for Google Gemini and Anthropic behind a unified `/v1/chat/completions` endpoint.
-- Semantic cache: embeds prompts via `all-MiniLM-L6-v2` (ONNX, in-process), stores in Redis, and returns cached responses for semantically similar queries.
-- Cost-aware router: an ONNX complexity classifier scores prompts and routes simple ones to cheap models, complex ones to capable models.
-- Full SSE streaming with tee-based cache write-through — tokens stream to the client while buffering for cache storage.
-- Prometheus metrics: request rates, TTFT, inter-token latency, cache hit ratio, cost tracking, routing decisions.
+5. **Cache miss** → complexity classifier scores the prompt and selects a cheap or expensive model within the target provider.
+6. Provider adapter translates the request and streams the response to the client while buffering for cache write.
+7. Metrics emitted at every stage.
 
 ## Quick Start
 
