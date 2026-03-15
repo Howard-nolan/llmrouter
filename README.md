@@ -1,5 +1,9 @@
 # llmrouter
 
+![Status](https://img.shields.io/badge/status-in%20progress-yellow)
+![Go](https://img.shields.io/badge/Go-1.23-00ADD8?logo=go&logoColor=white)
+![License](https://img.shields.io/badge/license-MIT-blue)
+
 An LLM inference gateway in Go with semantic response caching, cost-aware model routing, and token-level streaming observability.
 
 I document what I learn from each pull request in [**LEARNINGS.md**](./LEARNINGS.md).
