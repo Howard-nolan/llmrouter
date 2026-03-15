@@ -278,3 +278,21 @@ Key types:
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
+
+## 2026-03-15 - PR #14: Add architecture diagram and project status to README
+
+**Change Summary:**
+Add architecture diagram, project status, and polish to the README for external visibility.
+
+**How It Works:**
+- Mermaid flowchart shows the full request lifecycle: client → embedder → cache check (hit/miss) → complexity classifier → cheap/quality model selection → SSE stream → response
+- Classifier arrows labeled "simple" / "complex" to clarify that routing picks model tier, not provider
+- "At a glance" section gives a bullet summary above the diagram for quick scanning
+- Status badge (in progress), Go version badge, and MIT license badge at the top via shields.io
+- MIT LICENSE file added to the repo
+
+**Additional Notes:**
+- This is a docs-only change, no code modifications
+- Preparing the README for external visibility ahead of job applications
+- The diagram intentionally omits middleware and observability details to keep it scannable — those are covered in dedicated sections below
+
