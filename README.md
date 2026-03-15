@@ -15,44 +15,19 @@ I document what I learn from each pull request in [**LEARNINGS.md**](./LEARNINGS
 ## Architecture
 
 ```mermaid
-flowchart LR
-    Client([Client])
-
-    subgraph Gateway["llmrouter"]
-        direction TB
-        Middleware[Middleware\nlogging · auth · rate limit]
-        Embedder[Embedder\nall-MiniLM-L6-v2 · ONNX]
-        Cache[(Redis Cache\nsemantic similarity)]
-        Classifier[Complexity\nClassifier\nONNX MLP]
-        Router[Router\ncost-aware\nmodel selection]
-        Stream[SSE Stream\ntee + buffer]
-        Metrics[Metrics\nPrometheus]
-    end
-
-    subgraph Providers["LLM Providers"]
-        Gemini[Google Gemini]
-        Claude[Anthropic Claude]
-    end
-
-    Prometheus[(Prometheus)]
-    Grafana[Grafana]
-
-    Client -->|POST /v1/chat/completions| Middleware
-    Middleware --> Embedder
-    Embedder --> Cache
-
-    Cache -->|hit| Client
+flowchart TD
+    Client([Client]) -->|POST /v1/chat/completions| Middleware
+    Middleware[Middleware] --> Embedder
+    Embedder[Embedder · ONNX] --> Cache
+    Cache[(Redis Cache)] -->|hit| Response
     Cache -->|miss| Classifier
-    Classifier --> Router
-    Router --> Gemini
-    Router --> Claude
-    Gemini --> Stream
+    Classifier[Complexity Classifier] --> Router
+    Router[Router] --> Gemini[Google Gemini]
+    Router --> Claude[Anthropic Claude]
+    Gemini --> Stream[SSE Stream]
     Claude --> Stream
-    Stream -->|tokens| Client
-    Stream -->|buffered response| Cache
-
-    Metrics --> Prometheus
-    Prometheus --> Grafana
+    Stream -->|tokens| Response([Response])
+    Stream -->|buffer| Cache
 ```
 
 **Request lifecycle:**
