@@ -23,3 +23,9 @@ cache:
   similarity_threshold: 0.92
   ttl: 1h
   max_entries: 50000
+
+embedding:
+  model_path: ./models/model.onnx
+  tokenizer_path: ./models/tokenizer.json
+  library_path: ./lib/libonnxruntime.dylib
+  dimension: 384

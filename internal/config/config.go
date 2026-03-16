@@ -20,6 +20,15 @@ type Config struct {
 	Server    ServerConfig              `koanf:"server"`
 	Providers map[string]ProviderConfig `koanf:"providers"`
 	Cache     cache.CacheConfig         `koanf:"cache"`
+	Embedding EmbeddingConfig           `koanf:"embedding"`
+}
+
+// EmbeddingConfig holds paths and settings for the ONNX embedding model.
+type EmbeddingConfig struct {
+	ModelPath     string `koanf:"model_path"`
+	TokenizerPath string `koanf:"tokenizer_path"`
+	LibraryPath   string `koanf:"library_path"`
+	Dimension     int    `koanf:"dimension"`
 }
 
 // ServerConfig holds HTTP server settings.
