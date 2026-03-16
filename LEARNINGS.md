@@ -296,3 +296,24 @@ Add architecture diagram, project status, and polish to the README for external 
 - Preparing the README for external visibility ahead of job applications
 - The diagram intentionally omits middleware and observability details to keep it scannable — those are covered in dedicated sections below
 
+
+## 2026-03-16 - PR #15: Wire CacheConfig into config and add cache unit tests
+
+**Change Summary:**
+- Wired `CacheConfig` into the main `Config` struct in `internal/config/config.go` so the `cache:` YAML section is parsed automatically by koanf
+- Added `koanf` struct tags to `CacheConfig` fields in `internal/cache/redis.go` for correct YAML key mapping (e.g., `redis_url` → `RedisURL`)
+- Added the `cache:` section to `config.yaml` with production-ready defaults (0.92 threshold, 1h TTL, 50k max entries)
+- Added unit tests for the cache layer using `miniredis` (pure-Go in-memory Redis)
+
+**How It Works:**
+- `Config.Cache` is typed as `cache.CacheConfig` directly — no intermediate config struct, so `main.go` can pass `cfg.Cache` straight to `NewRedisCache()`
+- `CacheConfig` uses `koanf` struct tags to map underscore-separated YAML keys to camelCase Go fields (without these, koanf can't match `redis_url` to `RedisURL`)
+- Tests use `miniredis.RunT(t)` which spins up an in-memory Redis server per test and auto-cleans on test end — no Docker needed
+- Test embeddings are 384-dim L2-normalized vectors using different dimensions for distinctness (e.g., vec[0]=1.0 vs vec[1]=1.0 are orthogonal, so dot product = 0)
+- Four test cases: identical embedding hit (similarity=1.0), orthogonal embedding miss, FIFO eviction at MaxEntries, and flush resetting stats + entries
+
+**Additional Notes:**
+- Completes the final two tasks of Week 3 (Embedding Pipeline + Cache Infrastructure)
+- Chose to import `cache.CacheConfig` directly into the `config` package rather than duplicating the struct — trades a cross-package dependency for zero duplication
+- The `normalizedVec` helper initially had a bug: normalizing any scalar to unit length always gives 1.0, so `normalizedVec(1.0)` and `normalizedVec(2.0)` produced identical vectors and hashed to the same Redis key. Fixed by using separate dimensions for distinct vectors.
+
