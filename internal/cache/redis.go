@@ -26,10 +26,10 @@ const (
 // CacheConfig holds the settings for the semantic cache, loaded from
 // the cache: section of config.yaml.
 type CacheConfig struct {
-	RedisURL            string        // connection string, e.g. "redis://localhost:6379/0"
-	SimilarityThreshold float64       // minimum cosine similarity for a cache hit (e.g. 0.92)
-	TTL                 time.Duration // how long entries live before Redis auto-deletes them
-	MaxEntries          int           // max cached entries — triggers eviction when full
+	RedisURL            string        `koanf:"redis_url"`             // connection string, e.g. "redis://localhost:6379/0"
+	SimilarityThreshold float64       `koanf:"similarity_threshold"` // minimum cosine similarity for a cache hit (e.g. 0.92)
+	TTL                 time.Duration `koanf:"ttl"`                   // how long entries live before Redis auto-deletes them
+	MaxEntries          int           `koanf:"max_entries"`           // max cached entries — triggers eviction when full
 }
 
 // RedisCache implements the Cache interface using Redis for storage and

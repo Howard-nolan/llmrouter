@@ -17,3 +17,9 @@ providers:
     models:
       - claude-sonnet-4-5-20250929
       - claude-haiku-4-5-20251001
+
+cache:
+  redis_url: redis://localhost:6379/0
+  similarity_threshold: 0.92
+  ttl: 1h
+  max_entries: 50000
