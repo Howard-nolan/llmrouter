@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/howard-nolan/llmrouter/internal/cache"
 	"github.com/howard-nolan/llmrouter/internal/config"
+	"github.com/howard-nolan/llmrouter/internal/embedder"
 	"github.com/howard-nolan/llmrouter/internal/provider"
 	"github.com/howard-nolan/llmrouter/internal/server"
 )
@@ -68,7 +70,30 @@ func main() {
 		}
 	}
 
-	srv := server.New(cfg, models)
+	// Create the embedder from the ONNX model and tokenizer paths in config.
+	// This loads the ONNX Runtime shared library, initializes the inference
+	// session, and loads the HuggingFace tokenizer — all at startup, so
+	// request-time embedding is just a function call (no loading overhead).
+	emb, err := embedder.New(
+		cfg.Embedding.ModelPath,
+		cfg.Embedding.TokenizerPath,
+		cfg.Embedding.LibraryPath,
+		cfg.Embedding.Dimension,
+	)
+	if err != nil {
+		log.Fatalf("failed to create embedder: %v", err)
+	}
+	defer emb.Close()
+
+	// Create the Redis-backed semantic cache. NewRedisCache parses the
+	// Redis URL, creates a connection pool, and pings to verify connectivity.
+	c, err := cache.NewRedisCache(cfg.Cache)
+	if err != nil {
+		log.Fatalf("failed to create cache: %v", err)
+	}
+	defer c.Close()
+
+	srv := server.New(cfg, models, emb, c)
 
 	httpServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Server.Port),
