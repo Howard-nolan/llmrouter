@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/howard-nolan/llmrouter/internal/cache"
 	"github.com/joho/godotenv"
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/env"
@@ -18,6 +19,7 @@ import (
 type Config struct {
 	Server    ServerConfig              `koanf:"server"`
 	Providers map[string]ProviderConfig `koanf:"providers"`
+	Cache     cache.CacheConfig         `koanf:"cache"`
 }
 
 // ServerConfig holds HTTP server settings.
