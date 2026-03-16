@@ -317,3 +317,19 @@ Add architecture diagram, project status, and polish to the README for external 
 - Chose to import `cache.CacheConfig` directly into the `config` package rather than duplicating the struct — trades a cross-package dependency for zero duplication
 - The `normalizedVec` helper initially had a bug: normalizing any scalar to unit length always gives 1.0, so `normalizedVec(1.0)` and `normalizedVec(2.0)` produced identical vectors and hashed to the same Redis key. Fixed by using separate dimensions for distinct vectors.
 
+
+## 2026-03-16 - PR #16: Wire embedder and cache into Server for handler access
+
+**Change Summary:**
+- Add `EmbeddingConfig` struct to the config package and `embedding:` section to `config.yaml` (model path, tokenizer path, library path, dimension).
+- Expand `Server` struct with `embedder` and `cache` fields; update `New()` signature to accept both dependencies.
+- Initialize embedder and Redis cache in `main.go` at startup with `defer` cleanup for graceful shutdown.
+
+**How It Works:**
+`main.go` now creates the `Embedder` (ONNX model + HuggingFace tokenizer) and `RedisCache` from config, then passes them into `server.New()`. The `Server` struct stores them as fields so `handleChatCompletions` can access them for cache lookup/store in the next PR. The embedder is a concrete struct (stored as `*embedder.Embedder`), while the cache is an interface (`cache.Cache`) — no pointer wrapping needed since Go interfaces are already reference-like internally.
+
+**Additional Notes:**
+- This is the first step of Week 4 (Semantic Cache Integration). The handler doesn't use the embedder/cache yet — that wiring comes in subsequent PRs.
+- `EmbeddingConfig` follows the same koanf struct tag pattern as `CacheConfig` for underscore-separated YAML keys.
+- `defer emb.Close()` and `defer c.Close()` ensure the ONNX session and Redis connection pool are released on shutdown.
+
