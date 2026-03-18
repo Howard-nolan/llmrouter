@@ -333,3 +333,24 @@ Add architecture diagram, project status, and polish to the README for external 
 - `EmbeddingConfig` follows the same koanf struct tag pattern as `CacheConfig` for underscore-separated YAML keys.
 - `defer emb.Close()` and `defer c.Close()` ensure the ONNX session and Redis connection pool are released on shutdown.
 
+
+## 2026-03-18 - PR #17: Wire semantic cache into the live request path
+
+**Change Summary:**
+- Integrate embedder + cache into `handleChatCompletions` so cache lookups and stores happen on every request (when cache is configured)
+- Non-streaming path: embed prompt → lookup → HIT returns cached response / MISS calls provider then stores
+- Streaming path: `teeAndCache` goroutine pipeline forwards chunks to client while buffering deltas, then reconstructs and stores a full `ChatResponse` after stream completes
+
+**How It Works:**
+The handler computes an embedding of the last user message (via `lastUserMessage` helper) and checks `cache.Lookup()`. On a HIT, the cached response is returned immediately with `X-LLMRouter-Cache: HIT` and `X-LLMRouter-Similarity` headers. On a MISS, the request flows to the provider as before, with cache storage happening after:
+
+- **Non-streaming**: `cache.Store()` is called directly after the provider returns
+- **Streaming**: `teeAndCache()` inserts a goroutine between the provider channel and `stream.Write`. The goroutine forwards each chunk to an output channel (consumed by the SSE writer) while accumulating deltas in a `strings.Builder`. After the final chunk, it reconstructs a `ChatResponse` and calls `cache.Store()`
+
+Cache/embedding errors are non-fatal — logged and skipped so the provider path always works. A `cacheEnabled` flag guards all cache logic and degrades gracefully if embedder or cache are nil.
+
+**Additional Notes:**
+- Week 4 items completed: `lastUserMessage` helper, non-streaming cache path, streaming cache miss (tee + buffer + store)
+- Week 4 items remaining: streaming cache hit (replay as SSE burst), `x-cache` request parameter, `/cache/stats` + `/cache/flush` endpoints, integration tests
+- `stream.Write` is completely unchanged — it reads from a `<-chan StreamChunk` regardless of whether `teeAndCache` is in the pipeline
+
