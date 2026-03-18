@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/howard-nolan/llmrouter/internal/provider"
 	"github.com/howard-nolan/llmrouter/internal/stream"
@@ -61,6 +62,90 @@ func (s *Server) resolveProvider(model string) (provider.Provider, error) {
 	return p, nil
 }
 
+// lastUserMessage walks backward through the conversation and returns the
+// content of the last message with role "user". This is what we embed for
+// cache lookup — only the last user message, not the full conversation.
+func lastUserMessage(messages []provider.Message) (string, error) {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			return messages[i].Content, nil
+		}
+	}
+	return "", fmt.Errorf("no user message found")
+}
+
+// teeAndCache inserts a pipeline stage between the provider's chunk channel
+// and the SSE writer. It reads each chunk from the input channel, forwards
+// it to a new output channel (which stream.Write consumes), and buffers
+// all the delta text. After the stream completes, it reconstructs a full
+// ChatResponse and stores it in the cache.
+//
+// The goroutine inside is the "tee" — one copy goes to the client (via
+// the returned channel), the other accumulates for caching. This is like
+// piping a Node.js readable stream through a Transform that also collects
+// the data into a buffer.
+func (s *Server) teeAndCache(
+	chunks <-chan provider.StreamChunk,
+	embedding []float32,
+	ctx context.Context,
+) <-chan provider.StreamChunk {
+	// out is the channel that stream.Write will read from. We buffer it
+	// to 1 so the goroutine can stay slightly ahead of the writer without
+	// blocking on every single chunk.
+	out := make(chan provider.StreamChunk, 1)
+
+	go func() {
+		// Close the output channel when the goroutine exits. This signals
+		// to stream.Write that the stream is done (its range loop will end).
+		defer close(out)
+
+		// strings.Builder efficiently concatenates all the delta text
+		// fragments into one string. Each WriteString appends to an
+		// internal byte buffer — no new string allocation per chunk.
+		var buf strings.Builder
+		var lastChunk provider.StreamChunk
+
+		for chunk := range chunks {
+			// Forward every chunk to the output channel so stream.Write
+			// can send it to the client immediately.
+			out <- chunk
+
+			// Skip error chunks — don't cache failed streams.
+			if chunk.Error != nil {
+				return
+			}
+
+			// Accumulate the text delta for cache reconstruction.
+			buf.WriteString(chunk.Delta)
+
+			// Keep track of the last chunk — it carries the response ID,
+			// model name, and usage stats that we need for the cached response.
+			if chunk.Done {
+				lastChunk = chunk
+			}
+		}
+
+		// Only cache if we got a complete stream (saw a Done chunk)
+		// and actually have content to store.
+		if lastChunk.Done && buf.Len() > 0 {
+			resp := &provider.ChatResponse{
+				ID:      lastChunk.ID,
+				Model:   lastChunk.Model,
+				Content: buf.String(),
+			}
+			if lastChunk.Usage != nil {
+				resp.Usage = *lastChunk.Usage
+			}
+
+			if err := s.cache.Store(ctx, embedding, resp); err != nil {
+				log.Printf("cache store error (streaming): %v", err)
+			}
+		}
+	}()
+
+	return out
+}
+
 // handleHealth responds with a simple JSON status indicating the server
 // is alive. Later we'll expand this to check provider connectivity, Redis,
 // etc. — but for now it's a basic liveness probe.
@@ -104,9 +189,51 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Step 2: Resolve the provider from the model name.
-	// This is the registry lookup — "gemini-2.0-flash" → GoogleProvider,
-	// "claude-haiku-4-5-20251001" → AnthropicProvider, etc.
+	// Step 2: Cache lookup.
+	// Embed the last user message and check if we have a semantically
+	// similar response cached. embedding is declared at function scope
+	// so that both Lookup (here) and Store (after provider call) can
+	// use it without recomputing.
+	var embedding []float32
+	cacheEnabled := s.embedder != nil && s.cache != nil
+
+	if cacheEnabled {
+		userMsg, err := lastUserMessage(req.Messages)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error": err.Error(),
+			})
+			return
+		}
+
+		embedding, err = s.embedder.Embed(userMsg)
+		if err != nil {
+			// Embedding failure is non-fatal — log and skip caching.
+			log.Printf("embedding error (skipping cache): %v", err)
+			cacheEnabled = false
+		}
+	}
+
+	if cacheEnabled {
+		result, err := s.cache.Lookup(r.Context(), embedding)
+		if err != nil {
+			log.Printf("cache lookup error (skipping cache): %v", err)
+		} else if result != nil {
+			// Cache HIT — return the cached response immediately.
+			w.Header().Set("X-LLMRouter-Cache", "HIT")
+			w.Header().Set("X-LLMRouter-Similarity", fmt.Sprintf("%.4f", result.Similarity))
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(result.Response)
+			return
+		}
+	}
+
+	// Cache MISS (or cache disabled) — forward to the provider.
+	w.Header().Set("X-LLMRouter-Cache", "MISS")
+
+	// Step 3: Resolve the provider from the model name.
 	p, err := s.resolveProvider(req.Model)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
@@ -117,16 +244,10 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Step 3: Set response headers so the client knows which provider
-	// and model handled the request. These are useful for debugging
-	// and will be essential once we add "model": "auto" routing —
-	// the client won't know which model was selected without these.
 	w.Header().Set("X-LLMRouter-Provider", p.Name())
 	w.Header().Set("X-LLMRouter-Model", req.Model)
 
 	// Step 4: Branch on streaming vs non-streaming.
-	// Both paths use Retry to automatically retry retryable errors
-	// (429, 5xx) with exponential backoff.
 	const maxRetries = 3
 
 	if req.Stream {
@@ -139,6 +260,14 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			writeProviderError(w, err)
 			return
+		}
+
+		// If caching is enabled, insert the tee stage between the
+		// provider channel and the SSE writer. stream.Write reads
+		// from the tee's output channel — it doesn't know or care
+		// that there's a goroutine buffering for cache storage.
+		if cacheEnabled {
+			chunks = s.teeAndCache(chunks, embedding, r.Context())
 		}
 
 		if err := stream.Write(w, chunks); err != nil {
@@ -157,6 +286,13 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeProviderError(w, err)
 		return
+	}
+
+	// Store the response in cache for future hits.
+	if cacheEnabled {
+		if err := s.cache.Store(r.Context(), embedding, resp); err != nil {
+			log.Printf("cache store error: %v", err)
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
