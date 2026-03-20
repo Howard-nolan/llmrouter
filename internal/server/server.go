@@ -8,21 +8,28 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/howard-nolan/llmrouter/internal/cache"
 	"github.com/howard-nolan/llmrouter/internal/config"
-	"github.com/howard-nolan/llmrouter/internal/embedder"
 	"github.com/howard-nolan/llmrouter/internal/provider"
 )
+
+// Embedder is the interface for computing text embeddings. Defined here
+// (at the consumer) rather than in the embedder package to avoid pulling
+// in CGo native dependencies when importing the server package. The real
+// implementation (*embedder.ONNXEmbedder) satisfies this implicitly.
+type Embedder interface {
+	Embed(text string) ([]float32, error)
+}
 
 // Server holds the HTTP router and all dependencies that handlers need.
 type Server struct {
 	router   chi.Router
 	cfg      *config.Config
 	models   map[string]provider.Provider
-	embedder *embedder.Embedder
+	embedder Embedder
 	cache    cache.Cache
 }
 
 // New creates a Server with all dependencies wired in.
-func New(cfg *config.Config, models map[string]provider.Provider, emb *embedder.Embedder, c cache.Cache) *Server {
+func New(cfg *config.Config, models map[string]provider.Provider, emb Embedder, c cache.Cache) *Server {
 	s := &Server{
 		cfg:      cfg,
 		models:   models,
@@ -51,6 +58,8 @@ func (s *Server) routes() {
 
 	// --- Routes ---
 	r.Get("/health", s.handleHealth)
+	r.Get("/cache/stats", s.handleCacheStats)
+	r.Post("/cache/flush", s.handleCacheFlush)
 	r.Post("/v1/chat/completions", s.handleChatCompletions)
 
 	s.router = r

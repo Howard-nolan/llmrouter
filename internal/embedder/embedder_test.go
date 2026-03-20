@@ -20,7 +20,7 @@ func projectRoot(t *testing.T) string {
 	return filepath.Join(filepath.Dir(thisFile), "..", "..")
 }
 
-func setupEmbedder(t *testing.T) *Embedder {
+func setupEmbedder(t *testing.T) *ONNXEmbedder {
 	t.Helper()
 	root := projectRoot(t)
 
