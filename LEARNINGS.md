@@ -354,3 +354,27 @@ Cache/embedding errors are non-fatal — logged and skipped so the provider path
 - Week 4 items remaining: streaming cache hit (replay as SSE burst), `x-cache` request parameter, `/cache/stats` + `/cache/flush` endpoints, integration tests
 - `stream.Write` is completely unchanged — it reads from a `<-chan StreamChunk` regardless of whether `teeAndCache` is in the pipeline
 
+
+## 2026-03-20 - PR #18: Complete Week 4: streaming cache hits, x-cache, cache endpoints
+
+**Change Summary:**
+- **Streaming cache hit replay**: `replayChunks` helper converts a cached `ChatResponse` into a pre-loaded `<-chan StreamChunk` (buffered channel, capacity 2, no goroutine needed). Cache HITs with `stream: true` now replay via `stream.Write` as a fast SSE burst instead of returning raw JSON.
+- **`x-cache` request parameter**: New `XCache` field on `ChatRequest` (`json:"x-cache"`). `skip` bypasses cache entirely (no lookup, no store). `only` returns 404 on miss. `auto`/empty = default behavior.
+- **`/cache/stats` and `/cache/flush` endpoints**: GET `/cache/stats` returns JSON hit/miss/entry counts and avg similarity. POST `/cache/flush` clears all entries and resets counters. Both return 503 if cache is disabled.
+- **`Embedder` interface + integration tests**: Extracted `Embedder` interface at the server package level (avoids CGo dependency propagation). Renamed concrete type to `ONNXEmbedder`. 6 handler integration tests using mock embedder, mock provider, and miniredis.
+
+**How It Works:**
+**Streaming cache hit**: When `req.Stream == true` and cache returns a HIT, handler calls `replayChunks(result.Response)` which creates a buffered channel of 2 chunks (content + done), closes it, and returns. `stream.Write` consumes this identically to a real provider stream — it doesn't know the chunks came from cache.
+
+**x-cache flow**: Checked early in `handleChatCompletions`. `skip` sets `cacheEnabled = false` before any cache interaction. `only` is checked after the cache lookup block — if we reached the "forward to provider" section and `x-cache == "only"`, return 404 with `X-LLMRouter-Cache: MISS` header.
+
+**Embedder interface**: `server.Embedder` interface (single method: `Embed(string) ([]float32, error)`) defined at the consumer to avoid importing the embedder package's CGo dependencies into the server package. `*embedder.ONNXEmbedder` satisfies it implicitly. Tests use a `mockEmbedder` with a function field for deterministic vectors.
+
+**Cache endpoints**: `handleCacheStats` delegates to `cache.Stats()` (atomic counters + `ZCard`). `handleCacheFlush` delegates to `cache.Flush()` (deletes all keys + resets counters). Both nil-check `s.cache` and return 503 if disabled. JSON tags added to `CacheStats` for clean API output.
+
+**Additional Notes:**
+- Completes all remaining Week 4 tasks from the implementation plan.
+- `make run` now depends on `docker-up` so Redis is started automatically.
+- The `Embedder` interface lives in `server.go` rather than `embedder.go` due to CGo: importing the embedder package pulls in `libtokenizers` at link time, which would break server tests that only use mocks. This is the "define interfaces where they're consumed" Go pattern, motivated by a practical CGo constraint.
+- Similarity threshold tuning (rephrased prompts not matching) is deferred to Week 8 (load testing + threshold sweep).
+
