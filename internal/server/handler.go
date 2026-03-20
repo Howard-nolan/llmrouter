@@ -62,6 +62,30 @@ func (s *Server) resolveProvider(model string) (provider.Provider, error) {
 	return p, nil
 }
 
+// replayChunks converts a cached ChatResponse into a channel of StreamChunks
+// for SSE replay. Sends the full content as one chunk, then a Done chunk with
+// usage stats. The buffered channel is pre-loaded and closed — no goroutine
+// needed since all data is available upfront.
+func replayChunks(resp *provider.ChatResponse) <-chan provider.StreamChunk {
+	ch := make(chan provider.StreamChunk, 2)
+
+	ch <- provider.StreamChunk{
+		ID:    resp.ID,
+		Model: resp.Model,
+		Delta: resp.Content,
+	}
+
+	ch <- provider.StreamChunk{
+		ID:    resp.ID,
+		Model: resp.Model,
+		Done:  true,
+		Usage: &resp.Usage,
+	}
+
+	close(ch)
+	return ch
+}
+
 // lastUserMessage walks backward through the conversation and returns the
 // content of the last message with role "user". This is what we embed for
 // cache lookup — only the last user message, not the full conversation.
@@ -174,6 +198,47 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleCacheStats returns cache performance metrics as JSON.
+func (s *Server) handleCacheStats(w http.ResponseWriter, r *http.Request) {
+	if s.cache == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error": "cache is not enabled",
+		})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(s.cache.Stats())
+}
+
+// handleCacheFlush deletes all cached entries and resets stats.
+func (s *Server) handleCacheFlush(w http.ResponseWriter, r *http.Request) {
+	if s.cache == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error": "cache is not enabled",
+		})
+		return
+	}
+
+	if err := s.cache.Flush(r.Context()); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error": "flush failed: " + err.Error(),
+		})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status": "flushed",
+	})
+}
+
 // handleChatCompletions handles POST /v1/chat/completions.
 // It decodes the request, resolves the provider from the model name,
 // and dispatches to either the streaming or non-streaming path.
@@ -196,6 +261,11 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// use it without recomputing.
 	var embedding []float32
 	cacheEnabled := s.embedder != nil && s.cache != nil
+
+	// x-cache: "skip" disables caching entirely for this request.
+	if req.XCache == "skip" {
+		cacheEnabled = false
+	}
 
 	if cacheEnabled {
 		userMsg, err := lastUserMessage(req.Messages)
@@ -221,13 +291,37 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			log.Printf("cache lookup error (skipping cache): %v", err)
 		} else if result != nil {
-			// Cache HIT — return the cached response immediately.
+			// Cache HIT
 			w.Header().Set("X-LLMRouter-Cache", "HIT")
 			w.Header().Set("X-LLMRouter-Similarity", fmt.Sprintf("%.4f", result.Similarity))
+
+			if req.Stream {
+				// Replay as a fast SSE burst — stream.Write doesn't
+				// know (or care) that these chunks came from cache.
+				chunks := replayChunks(result.Response)
+				if err := stream.Write(w, chunks); err != nil {
+					log.Printf("stream write error: %v", err)
+				}
+				return
+			}
+
+			// Non-streaming: return as JSON.
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(result.Response)
 			return
 		}
+	}
+
+	// x-cache: "only" returns 404 on a cache miss instead of calling
+	// the provider. Useful for testing cache without spending tokens.
+	if req.XCache == "only" {
+		w.Header().Set("X-LLMRouter-Cache", "MISS")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error": "cache miss (x-cache: only)",
+		})
+		return
 	}
 
 	// Cache MISS (or cache disabled) — forward to the provider.

@@ -50,8 +50,8 @@ type CacheResult struct {
 // they're updated atomically from concurrent goroutines — atomic ops
 // in Go require int64, not int.
 type CacheStats struct {
-	Hits          int64
-	Misses        int64
-	Entries       int64
-	AvgSimilarity float64
+	Hits          int64   `json:"hits"`
+	Misses        int64   `json:"misses"`
+	Entries       int64   `json:"entries"`
+	AvgSimilarity float64 `json:"avg_similarity"`
 }

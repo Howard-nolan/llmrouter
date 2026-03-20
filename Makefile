@@ -18,7 +18,8 @@ lint:
 	golangci-lint run
 
 ## Compile and run the gateway in one step (no binary produced).
-run:
+## Starts Docker services (Redis, Prometheus) if not already running.
+run: docker-up
 	go run ./cmd/llmrouter
 
 ## Start the local dev stack (Redis + Prometheus).

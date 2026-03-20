@@ -49,6 +49,7 @@ type ChatRequest struct {
 	Messages  []Message `json:"messages"`   // the conversation history
 	Stream    bool      `json:"stream"`     // true = SSE streaming
 	MaxTokens int       `json:"max_tokens"` // max tokens in the response
+	XCache    string    `json:"x-cache"`    // "auto" (default), "skip", "only"
 }
 
 // Message is a single message in the conversation. This matches the OpenAI

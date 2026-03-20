@@ -8,10 +8,16 @@ import (
 	ort "github.com/yalue/onnxruntime_go"
 )
 
-// Embedder tokenizes text and runs it through an ONNX embedding model to
+// Embedder is the interface for computing text embeddings. Consumers depend
+// on this interface so they can swap implementations (e.g., mock in tests).
+type Embedder interface {
+	Embed(text string) ([]float32, error)
+}
+
+// ONNXEmbedder tokenizes text and runs it through an ONNX embedding model to
 // produce a fixed-size vector. Used for semantic cache lookups and complexity
-// classification.
-type Embedder struct {
+// classification. Satisfies the Embedder interface.
+type ONNXEmbedder struct {
 	tokenizer *tokenizers.Tokenizer
 	session   *ort.DynamicAdvancedSession
 	dimension int
@@ -20,7 +26,7 @@ type Embedder struct {
 // New creates an Embedder by loading the tokenizer and ONNX model. The
 // libraryPath must point to the ONNX Runtime shared library
 // (libonnxruntime.dylib on macOS, libonnxruntime.so on Linux).
-func New(modelPath, tokenizerPath, libraryPath string, dimension int) (*Embedder, error) {
+func New(modelPath, tokenizerPath, libraryPath string, dimension int) (*ONNXEmbedder, error) {
 	// Tell the Go wrapper where to find the ONNX Runtime C++ library.
 	// This must happen before InitializeEnvironment.
 	ort.SetSharedLibraryPath(libraryPath)
@@ -61,7 +67,7 @@ func New(modelPath, tokenizerPath, libraryPath string, dimension int) (*Embedder
 		return nil, fmt.Errorf("creating ONNX session from %s: %w", modelPath, err)
 	}
 
-	return &Embedder{
+	return &ONNXEmbedder{
 		tokenizer: tk,
 		session:   session,
 		dimension: dimension,
@@ -71,7 +77,7 @@ func New(modelPath, tokenizerPath, libraryPath string, dimension int) (*Embedder
 // Embed converts text into a fixed-size vector by tokenizing, running ONNX
 // inference, and returning the model's sentence embedding output (mean-pooled
 // + L2-normalized).
-func (e *Embedder) Embed(text string) ([]float32, error) {
+func (e *ONNXEmbedder) Embed(text string) ([]float32, error) {
 	// Step 1: Tokenize with attention mask. The tokenizer.json has padding
 	// (to 128) and truncation built in, so Encode returns exactly
 	// maxSeqLen tokens. We use EncodeWithOptions to also get the attention
@@ -133,7 +139,7 @@ func (e *Embedder) Embed(text string) ([]float32, error) {
 }
 
 // Close releases the tokenizer, ONNX session, and ONNX Runtime environment.
-func (e *Embedder) Close() error {
+func (e *ONNXEmbedder) Close() error {
 	e.session.Destroy()
 	e.tokenizer.Close()
 	return ort.DestroyEnvironment()
