@@ -88,11 +88,24 @@ func bytesToEmbedding(data []byte) []float32 {
 }
 
 // embeddingKey returns the Redis key for a cache entry by SHA-256 hashing
-// the embedding bytes. Deterministic: same embedding always produces the
-// same key, so re-storing is idempotent.
-func embeddingKey(embedding []float32) string {
-	hash := sha256.Sum256(embeddingToBytes(embedding))
+// the embedding bytes concatenated with the model name. Including the model
+// ensures that the same prompt sent to different models gets separate cache
+// entries (different Redis keys) rather than overwriting each other.
+//
+// The model bytes only affect the key — they don't touch the stored embedding
+// vector, so the cosine similarity search is unaffected.
+func embeddingKey(embedding []float32, model string) string {
+	embBytes := embeddingToBytes(embedding)
+	combined := append(embBytes, []byte(model)...)
+	hash := sha256.Sum256(combined)
 	return keyPrefix + hex.EncodeToString(hash[:])
+}
+
+// modelIndexKey returns the Redis key for a model-scoped sorted set index.
+// Lookup uses this to scan only entries for the requested model, preventing
+// cross-model cache hits.
+func modelIndexKey(model string) string {
+	return indexKey + ":" + model
 }
 
 // ---------------------------------------------------------------------------
@@ -102,8 +115,8 @@ func embeddingKey(embedding []float32) string {
 // Store saves an LLM response keyed by its prompt embedding. Uses a Redis
 // pipeline to batch the hash write, TTL set, and index update into one
 // round-trip. Evicts the oldest entry if we're at MaxEntries.
-func (rc *RedisCache) Store(ctx context.Context, embedding []float32, response *provider.ChatResponse) error {
-	key := embeddingKey(embedding)
+func (rc *RedisCache) Store(ctx context.Context, embedding []float32, model string, response *provider.ChatResponse) error {
+	key := embeddingKey(embedding, model)
 
 	responseJSON, err := json.Marshal(response)
 	if err != nil {
@@ -113,16 +126,26 @@ func (rc *RedisCache) Store(ctx context.Context, embedding []float32, response *
 	now := time.Now()
 	embBytes := embeddingToBytes(embedding)
 
-	// Pipeline: batch 3 commands into 1 network round-trip.
+	// Pipeline: batch commands into 1 network round-trip.
+	// We write to two sorted set indexes:
+	//   1. The global index (for eviction — finding the oldest entry across all models)
+	//   2. The model-scoped index (for lookup — only scanning entries for the requested model)
+	// We also store the model name in the hash so that eviction can remove
+	// the entry from the correct model-scoped index.
 	pipe := rc.client.Pipeline()
 	pipe.HSet(ctx, key, map[string]interface{}{
 		"embedding":  embBytes,
 		"response":   responseJSON,
+		"model":      model,
 		"created_at": now.Unix(),
 		"hit_count":  0,
 	})
 	pipe.Expire(ctx, key, rc.cfg.TTL)
 	pipe.ZAdd(ctx, indexKey, redis.Z{
+		Score:  float64(now.UnixMilli()),
+		Member: key,
+	})
+	pipe.ZAdd(ctx, modelIndexKey(model), redis.Z{
 		Score:  float64(now.UnixMilli()),
 		Member: key,
 	})
@@ -144,16 +167,26 @@ func (rc *RedisCache) Store(ctx context.Context, embedding []float32, response *
 	return nil
 }
 
-// evictOldest removes the n oldest entries (lowest scores in the index).
+// evictOldest removes the n oldest entries (lowest scores in the global index).
+// For each evicted entry, it also removes the entry from its model-scoped
+// index by reading the "model" field stored in the hash.
 func (rc *RedisCache) evictOldest(ctx context.Context, n int) {
-	// ZPopMin returns the n members with the lowest scores.
+	// ZPopMin returns the n members with the lowest scores (oldest entries).
 	entries, err := rc.client.ZPopMin(ctx, indexKey, int64(n)).Result()
 	if err != nil {
 		return // best-effort eviction — don't fail the Store call
 	}
 
 	for _, entry := range entries {
-		rc.client.Del(ctx, entry.Member.(string))
+		key := entry.Member.(string)
+
+		// Read the model field so we can remove from the model-scoped index.
+		model, err := rc.client.HGet(ctx, key, "model").Result()
+		if err == nil && model != "" {
+			rc.client.ZRem(ctx, modelIndexKey(model), key)
+		}
+
+		rc.client.Del(ctx, key)
 	}
 }
 
@@ -167,9 +200,11 @@ func (rc *RedisCache) evictOldest(ctx context.Context, n int) {
 // Two-pass approach: first pass fetches only embeddings to find the best
 // match (avoids deserializing every cached response). Second pass fetches
 // the full response only for the winner.
-func (rc *RedisCache) Lookup(ctx context.Context, embedding []float32) (*CacheResult, error) {
-	// Get all cache keys from the sorted set index.
-	keys, err := rc.client.ZRange(ctx, indexKey, 0, -1).Result()
+func (rc *RedisCache) Lookup(ctx context.Context, embedding []float32, model string) (*CacheResult, error) {
+	// Get cache keys from the model-scoped index. This ensures we only
+	// compare against entries stored for the same model, preventing
+	// cross-model cache hits.
+	keys, err := rc.client.ZRange(ctx, modelIndexKey(model), 0, -1).Result()
 	if err != nil {
 		return nil, fmt.Errorf("reading cache index: %w", err)
 	}
@@ -272,15 +307,32 @@ func (rc *RedisCache) Stats() CacheStats {
 
 // Flush deletes all cache entries and resets stats counters.
 func (rc *RedisCache) Flush(ctx context.Context) error {
-	// Get all keys from the index, then delete them plus the index itself.
+	// Get all entry keys from the global index.
 	keys, err := rc.client.ZRange(ctx, indexKey, 0, -1).Result()
 	if err != nil {
 		return fmt.Errorf("reading cache index: %w", err)
 	}
 
 	if len(keys) > 0 {
-		// Append the index key itself so we delete everything in one call.
+		// Append the global index key.
 		keys = append(keys, indexKey)
+
+		// Find all model-scoped index keys (cache:index:*) and include
+		// them in the delete. We use SCAN with a match pattern instead
+		// of KEYS to avoid blocking Redis on large keyspaces.
+		var cursor uint64
+		for {
+			var modelKeys []string
+			modelKeys, cursor, err = rc.client.Scan(ctx, cursor, indexKey+":*", 100).Result()
+			if err != nil {
+				break // best-effort — the entry keys will still be deleted
+			}
+			keys = append(keys, modelKeys...)
+			if cursor == 0 {
+				break
+			}
+		}
+
 		if err := rc.client.Del(ctx, keys...).Err(); err != nil {
 			return fmt.Errorf("deleting cache entries: %w", err)
 		}

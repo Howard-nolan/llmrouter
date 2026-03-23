@@ -17,13 +17,15 @@ import (
 // or use mocks in tests.
 type Cache interface {
 	// Lookup scans cached embeddings for the closest match to the given
-	// embedding. Returns the cached response if similarity exceeds the
-	// configured threshold, or nil if no match is found (nil, nil = miss).
-	Lookup(ctx context.Context, embedding []float32) (*CacheResult, error)
+	// embedding within the specified model's cache partition. Returns the
+	// cached response if similarity exceeds the configured threshold, or
+	// nil if no match is found (nil, nil = miss).
+	Lookup(ctx context.Context, embedding []float32, model string) (*CacheResult, error)
 
-	// Store saves an LLM response keyed by its prompt embedding. Called
-	// after a cache miss once the provider returns a successful response.
-	Store(ctx context.Context, embedding []float32, response *provider.ChatResponse) error
+	// Store saves an LLM response keyed by its prompt embedding, scoped
+	// to the specified model. Called after a cache miss once the provider
+	// returns a successful response.
+	Store(ctx context.Context, embedding []float32, model string, response *provider.ChatResponse) error
 
 	// Stats returns current cache metrics (hits, misses, entry count).
 	// Uses in-memory atomic counters, so no Redis call is needed.
