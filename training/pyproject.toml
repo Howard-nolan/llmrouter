@@ -1,0 +1,14 @@
+[project]
+name = "training"
+version = "0.1.0"
+description = "Complexity classifier training pipeline for llmrouter"
+requires-python = ">=3.11"
+dependencies = [
+    "datasets>=4.8.4",
+    "google-genai>=1.68.0",
+    "google-generativeai>=0.8.6",
+    "onnx>=1.20.1",
+    "python-dotenv>=1.2.2",
+    "sentence-transformers>=5.3.0",
+    "torch>=2.10.0",
+]

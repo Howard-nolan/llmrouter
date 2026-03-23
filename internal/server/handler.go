@@ -111,6 +111,7 @@ func lastUserMessage(messages []provider.Message) (string, error) {
 func (s *Server) teeAndCache(
 	chunks <-chan provider.StreamChunk,
 	embedding []float32,
+	model string,
 	ctx context.Context,
 ) <-chan provider.StreamChunk {
 	// out is the channel that stream.Write will read from. We buffer it
@@ -161,7 +162,7 @@ func (s *Server) teeAndCache(
 				resp.Usage = *lastChunk.Usage
 			}
 
-			if err := s.cache.Store(ctx, embedding, resp); err != nil {
+			if err := s.cache.Store(ctx, embedding, model, resp); err != nil {
 				log.Printf("cache store error (streaming): %v", err)
 			}
 		}
@@ -287,7 +288,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if cacheEnabled {
-		result, err := s.cache.Lookup(r.Context(), embedding)
+		result, err := s.cache.Lookup(r.Context(), embedding, req.Model)
 		if err != nil {
 			log.Printf("cache lookup error (skipping cache): %v", err)
 		} else if result != nil {
@@ -361,7 +362,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		// from the tee's output channel — it doesn't know or care
 		// that there's a goroutine buffering for cache storage.
 		if cacheEnabled {
-			chunks = s.teeAndCache(chunks, embedding, r.Context())
+			chunks = s.teeAndCache(chunks, embedding, req.Model, r.Context())
 		}
 
 		if err := stream.Write(w, chunks); err != nil {
@@ -384,7 +385,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	// Store the response in cache for future hits.
 	if cacheEnabled {
-		if err := s.cache.Store(r.Context(), embedding, resp); err != nil {
+		if err := s.cache.Store(r.Context(), embedding, req.Model, resp); err != nil {
 			log.Printf("cache store error: %v", err)
 		}
 	}

@@ -78,11 +78,11 @@ func TestStoreAndLookup_IdenticalEmbedding(t *testing.T) {
 	resp := fakeResponse("Hello, world!")
 
 	// Store a response.
-	err := rc.Store(ctx, embedding, resp)
+	err := rc.Store(ctx, embedding, "test-model", resp)
 	require.NoError(t, err)
 
-	// Look up with the exact same embedding — should be a hit.
-	result, err := rc.Lookup(ctx, embedding)
+	// Look up with the exact same embedding and model — should be a hit.
+	result, err := rc.Lookup(ctx, embedding, "test-model")
 	require.NoError(t, err)
 	require.NotNil(t, result, "expected cache hit for identical embedding")
 
@@ -102,7 +102,7 @@ func TestLookup_DissimilarEmbedding(t *testing.T) {
 	ctx := context.Background()
 
 	// Store with one vector direction.
-	err := rc.Store(ctx, normalizedVec(1.0), fakeResponse("cached response"))
+	err := rc.Store(ctx, normalizedVec(1.0), "test-model", fakeResponse("cached response"))
 	require.NoError(t, err)
 
 	// Look up with a vector pointing in a completely different dimension.
@@ -111,7 +111,7 @@ func TestLookup_DissimilarEmbedding(t *testing.T) {
 	orthogonal := make([]float32, 384)
 	orthogonal[1] = 1.0
 
-	result, err := rc.Lookup(ctx, orthogonal)
+	result, err := rc.Lookup(ctx, orthogonal, "test-model")
 	require.NoError(t, err)
 	assert.Nil(t, result, "expected cache miss for dissimilar embedding")
 
@@ -133,28 +133,32 @@ func TestEviction_MaxEntries(t *testing.T) {
 	vec3 := make([]float32, 384)
 	vec3[2] = 1.0
 
-	require.NoError(t, rc.Store(ctx, vec1, fakeResponse("first")))
-	require.NoError(t, rc.Store(ctx, vec2, fakeResponse("second")))
-	require.NoError(t, rc.Store(ctx, vec3, fakeResponse("third")))
+	require.NoError(t, rc.Store(ctx, vec1, "test-model", fakeResponse("first")))
+	// Small sleep to ensure distinct timestamps in the sorted set, so
+	// eviction order is deterministic (lowest score = oldest = evicted first).
+	time.Sleep(2 * time.Millisecond)
+	require.NoError(t, rc.Store(ctx, vec2, "test-model", fakeResponse("second")))
+	time.Sleep(2 * time.Millisecond)
+	require.NoError(t, rc.Store(ctx, vec3, "test-model", fakeResponse("third")))
 
 	// With MaxEntries=2, the oldest (vec1/"first") should have been evicted.
 	stats := rc.Stats()
 	assert.Equal(t, int64(2), stats.Entries)
 
 	// vec1 should miss — it was evicted.
-	result, err := rc.Lookup(ctx, vec1)
+	result, err := rc.Lookup(ctx, vec1, "test-model")
 	require.NoError(t, err)
 	assert.Nil(t, result, "expected evicted entry to be a cache miss")
 
 	// vec2 and vec3 should still be present. They're orthogonal to each
 	// other so they won't match each other, but looking up with their
 	// exact embedding should hit (similarity = 1.0).
-	result, err = rc.Lookup(ctx, vec2)
+	result, err = rc.Lookup(ctx, vec2, "test-model")
 	require.NoError(t, err)
 	require.NotNil(t, result, "expected vec2 to still be cached")
 	assert.Equal(t, "second", result.Response.Content)
 
-	result, err = rc.Lookup(ctx, vec3)
+	result, err = rc.Lookup(ctx, vec3, "test-model")
 	require.NoError(t, err)
 	require.NotNil(t, result, "expected vec3 to still be cached")
 	assert.Equal(t, "third", result.Response.Content)
@@ -169,10 +173,10 @@ func TestFlush_ResetsEverything(t *testing.T) {
 	vec1[0] = 1.0
 	vec2 := make([]float32, 384)
 	vec2[1] = 1.0
-	require.NoError(t, rc.Store(ctx, vec1, fakeResponse("one")))
-	require.NoError(t, rc.Store(ctx, vec2, fakeResponse("two")))
+	require.NoError(t, rc.Store(ctx, vec1, "test-model", fakeResponse("one")))
+	require.NoError(t, rc.Store(ctx, vec2, "test-model", fakeResponse("two")))
 
-	result, err := rc.Lookup(ctx, vec1)
+	result, err := rc.Lookup(ctx, vec1, "test-model")
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -193,7 +197,29 @@ func TestFlush_ResetsEverything(t *testing.T) {
 	assert.Equal(t, float64(0), stats.AvgSimilarity)
 
 	// Previously stored entry should now miss.
-	result, err = rc.Lookup(ctx, vec1)
+	result, err = rc.Lookup(ctx, vec1, "test-model")
 	require.NoError(t, err)
 	assert.Nil(t, result, "expected cache miss after flush")
+}
+
+func TestLookup_CrossModelIsolation(t *testing.T) {
+	rc := setupCache(t, 100)
+	ctx := context.Background()
+
+	embedding := normalizedVec(1.0)
+
+	// Store a response under model A.
+	err := rc.Store(ctx, embedding, "model-a", fakeResponse("response from model A"))
+	require.NoError(t, err)
+
+	// Look up with the exact same embedding but a different model — should miss.
+	result, err := rc.Lookup(ctx, embedding, "model-b")
+	require.NoError(t, err)
+	assert.Nil(t, result, "expected cache miss for different model with same embedding")
+
+	// Same embedding, same model — should hit.
+	result, err = rc.Lookup(ctx, embedding, "model-a")
+	require.NoError(t, err)
+	require.NotNil(t, result, "expected cache hit for same model and embedding")
+	assert.Equal(t, "response from model A", result.Response.Content)
 }
