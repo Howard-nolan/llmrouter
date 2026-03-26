@@ -31,6 +31,7 @@ vendor/
 training/__pycache__/
 training/*.pt
 training/*.onnx
+training/*.jsonl
 training/data/
 
 # Docker
