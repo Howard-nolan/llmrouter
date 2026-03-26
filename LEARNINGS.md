@@ -396,3 +396,26 @@ Cache/embedding errors are non-fatal — logged and skipped so the provider path
 - The `collect_dataset.py` script is scaffolded but not yet run end-to-end — LMSYS-Chat-1M requires gated HuggingFace access, so the dataset source mix may change in the next PR.
 - Covers a bug fix from Week 4 cache work and initial scaffolding for Week 5.
 
+
+## 2026-03-26 - PR #20: Update training pipeline: ungated datasets + Anthropic models
+
+**Change Summary:**
+- Replaced gated LMSYS-Chat-1M dataset with ungated alternatives: Dolly (200 prompts) + OpenAssistant/oasst2 (150 prompts), keeping MMLU (100) + HumanEval (50) for a total of 500 diverse prompts.
+- Switched from Gemini (2.0-flash + 2.5-pro) to Anthropic (Haiku + Sonnet) for response collection, due to persistent Gemini 2.5 Pro 503 availability issues.
+- Added truncation detection (`stop_reason=max_tokens`) to skip incomplete responses, and bumped `max_output_tokens` to 8192 to prevent Gemini-style thinking models from exhausting the token budget.
+
+**How It Works:**
+- `sample_openassistant()` replaces `sample_lmsys()`: loads `OpenAssistant/oasst2`, filters for English root prompter messages (`role=="prompter"`, `parent_id is None`), applies 20–2000 char length filter. No streaming needed — oasst2 is only ~13k rows.
+- `sample_dolly()` bumped from 50 → 200 prompts as a primary source.
+- `call_anthropic()` replaces `call_gemini()`: uses `anthropic.Anthropic.messages.create()` with the standard Messages API format. Checks `stop_reason` for truncation and `content[0].text` for empty responses before returning.
+- `collect()` now initializes an `anthropic.Anthropic` client with `ANTHROPIC_API_KEY` instead of a Gemini client.
+- Added `training/*.jsonl` to `.gitignore` (generated output files: `prompts.jsonl` and `dataset.jsonl`).
+- Resumability is preserved: `prompts.jsonl` locks the prompt set, `dataset.jsonl` tracks completed entries, and re-runs skip already-processed prompts.
+
+**Additional Notes:**
+- **Week 5 of the implementation plan** — this covers the first task (`collect_dataset.py`) but not yet `label_quality.py`, `train_classifier.py`, or `export_onnx.py`.
+- Data collection is in progress (~14/500 prompts collected so far). The script can be resumed with `cd training && uv run python collect_dataset.py`.
+- Originally planned to use Gemini 2.5 Flash-Lite (cheap) + 2.5 Pro (quality), but Pro returned persistent 503s. Also discovered that Pro's "thinking" tokens consume the `max_output_tokens` budget, leaving no visible output at 1024 tokens — fixed by bumping to 8192 and adding truncation checks. These fixes remain in the code for future Gemini usage.
+- The Haiku vs Sonnet quality gap is well-suited for classifier training — similar capability spread to Flash-Lite vs Pro. The classifier learns "is this prompt too hard for the cheap model" regardless of model family.
+- `anthropic` SDK added as a dependency in `training/pyproject.toml`.
+
