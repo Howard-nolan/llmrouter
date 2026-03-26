@@ -1,14 +1,15 @@
 """
 collect_dataset.py — Phase 1 of the complexity classifier pipeline.
 
-Samples ~500 diverse prompts from four public datasets, sends each to both
-a cheap model (gemini-2.0-flash) and a quality model (gemini-2.5-pro), and
-saves the prompt + both responses as JSONL.
+Samples ~500 diverse prompts from four public datasets (Dolly, OpenAssistant,
+MMLU, HumanEval), sends each to both a cheap model (claude-haiku-4-5-20251001)
+and a quality model (claude-sonnet-4-5-20250929), and saves the prompt + both
+responses as JSONL.
 
 Usage:
     uv run python collect_dataset.py
 
-Requires GOOGLE_API_KEY environment variable.
+Requires ANTHROPIC_API_KEY environment variable.
 """
 
 import json
@@ -17,8 +18,8 @@ import random
 import time
 from pathlib import Path
 
+import anthropic
 from dotenv import load_dotenv
-from google import genai
 from datasets import load_dataset
 
 # Load environment variables from the project root .env file.
@@ -30,9 +31,9 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 # Config
 # ---------------------------------------------------------------------------
 
-CHEAP_MODEL = "gemini-2.0-flash"
-QUALITY_MODEL = "gemini-2.5-pro"
-MAX_TOKENS = 1024
+CHEAP_MODEL = "claude-haiku-4-5-20251001"
+QUALITY_MODEL = "claude-sonnet-4-5-20250929"
+MAX_TOKENS = 8192
 OUTPUT_FILE = Path(__file__).parent / "dataset.jsonl"
 PROMPTS_FILE = Path(__file__).parent / "prompts.jsonl"
 
@@ -50,43 +51,32 @@ SEED = 42
 # ---------------------------------------------------------------------------
 
 
-def sample_lmsys(n: int = 300) -> list[dict]:
+def sample_openassistant(n: int = 150) -> list[dict]:
     """
-    Sample real user prompts from LMSYS-Chat-1M.
+    Sample real user prompts from OpenAssistant (oasst2).
 
-    This dataset contains 1M real conversations from Chatbot Arena. We extract
-    the first user message from each conversation, filter to English, and
-    remove extremely short or long prompts.
+    Each row is a single message in a conversation tree. Root messages
+    (parent_id is None) with role "prompter" are first user messages.
+    We filter to English and apply the same length constraints.
     """
-    print(f"Loading LMSYS-Chat-1M (sampling {n})...")
-    ds = load_dataset("lmsys/lmsys-chat-1m", split="train", streaming=True)
+    print(f"Loading OpenAssistant/oasst2 (sampling {n})...")
+    ds = load_dataset("OpenAssistant/oasst2", split="train")
 
-    # streaming=True avoids downloading the full 1M-row dataset into memory.
-    # We iterate through it and collect candidates until we have enough.
-    # This is like a Node.js readable stream — we consume rows one at a time.
     candidates = []
     for row in ds:
-        # Each row has a "conversation" field: a list of {role, content} dicts.
-        # We want the first user message.
-        if row.get("language") != "English":
+        # Only root messages (first in a conversation tree) from users.
+        if row.get("role") != "prompter" or row.get("parent_id") is not None:
             continue
 
-        conversation = row.get("conversation", [])
-        if not conversation or conversation[0].get("role") != "human":
+        if row.get("lang") != "en":
             continue
 
-        prompt = conversation[0]["content"].strip()
+        prompt = row["text"].strip()
 
-        # Filter out too-short (likely "hi"/"test") and too-long prompts.
         if len(prompt) < 20 or len(prompt) > 2000:
             continue
 
-        candidates.append({"prompt": prompt, "source": "lmsys"})
-
-        # Collect more candidates than we need so we can randomly sample.
-        # 3x gives us good diversity after random selection.
-        if len(candidates) >= n * 3:
-            break
+        candidates.append({"prompt": prompt, "source": "openassistant"})
 
     random.shuffle(candidates)
     return candidates[:n]
@@ -142,7 +132,7 @@ def sample_humaneval(n: int = 50) -> list[dict]:
     return candidates[:n]
 
 
-def sample_dolly(n: int = 50) -> list[dict]:
+def sample_dolly(n: int = 200) -> list[dict]:
     """
     Sample curated instructions from Dolly.
 
@@ -174,27 +164,40 @@ def sample_dolly(n: int = 50) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Gemini API calls
+# Anthropic API calls
 # ---------------------------------------------------------------------------
 
 
-def call_gemini(client: genai.Client, model_name: str, prompt: str) -> str | None:
+def call_anthropic(client: anthropic.Anthropic, model_name: str, prompt: str) -> str | None:
     """
-    Send a prompt to a Gemini model and return the response text.
+    Send a prompt to an Anthropic model and return the response text.
 
     Retries up to MAX_RETRIES times with exponential backoff on transient
     errors (rate limits, timeouts, server errors).
 
-    Returns None if all retries fail — the caller will skip this prompt.
+    Returns None if all retries fail or if the response was truncated
+    (stop_reason="max_tokens") — the caller will skip this prompt.
     """
     for attempt in range(MAX_RETRIES):
         try:
-            response = client.models.generate_content(
+            response = client.messages.create(
                 model=model_name,
-                contents=prompt,
-                config={"max_output_tokens": MAX_TOKENS},
+                max_tokens=MAX_TOKENS,
+                messages=[{"role": "user", "content": prompt}],
             )
-            return response.text
+
+            # Skip truncated responses — they'd produce misleading quality labels.
+            if response.stop_reason == "max_tokens":
+                print(f"  Truncated response from {model_name} (stop_reason=max_tokens)")
+                return None
+
+            # Extract text from the first content block.
+            text = response.content[0].text
+            if not text:
+                print(f"  Empty response from {model_name}")
+                return None
+
+            return text
 
         except Exception as e:
             wait = RETRY_BACKOFF ** attempt
@@ -235,13 +238,13 @@ def collect():
     Main entrypoint: sample prompts, call both models, save results.
     """
     # Validate API key is set (loaded from .env by dotenv above).
-    api_key = os.environ.get("GOOGLE_API_KEY")
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
-        print("Error: GOOGLE_API_KEY not found.")
+        print("Error: ANTHROPIC_API_KEY not found.")
         print("Set it in .env at the project root or export it in your shell.")
         return
 
-    client = genai.Client(api_key=api_key)
+    client = anthropic.Anthropic(api_key=api_key)
     random.seed(SEED)
 
     # Phase 1: Sample prompts (or load from cache).
@@ -257,10 +260,10 @@ def collect():
                     prompts.append(json.loads(line))
     else:
         prompts = []
-        prompts.extend(sample_lmsys(300))
+        prompts.extend(sample_dolly(200))
+        prompts.extend(sample_openassistant(150))
         prompts.extend(sample_mmlu(100))
         prompts.extend(sample_humaneval(50))
-        prompts.extend(sample_dolly(50))
         random.shuffle(prompts)
 
         # Save prompts for reproducibility.
@@ -286,11 +289,11 @@ def collect():
             progress = f"[{done + i + 1}/{total}]"
 
             print(f"{progress} Sending to {CHEAP_MODEL}...")
-            cheap_response = call_gemini(client, CHEAP_MODEL, prompt)
+            cheap_response = call_anthropic(client, CHEAP_MODEL, prompt)
             time.sleep(API_DELAY)
 
             print(f"{progress} Sending to {QUALITY_MODEL}...")
-            quality_response = call_gemini(client, QUALITY_MODEL, prompt)
+            quality_response = call_anthropic(client, QUALITY_MODEL, prompt)
             time.sleep(API_DELAY)
 
             # Skip if either model failed.

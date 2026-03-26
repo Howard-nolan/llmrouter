@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Complexity classifier training pipeline for llmrouter"
 requires-python = ">=3.11"
 dependencies = [
+    "anthropic>=0.86.0",
     "datasets>=4.8.4",
     "google-genai>=1.68.0",
     "google-generativeai>=0.8.6",
