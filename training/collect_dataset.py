@@ -15,7 +15,9 @@ Requires ANTHROPIC_API_KEY environment variable.
 import json
 import os
 import random
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import anthropic
@@ -37,8 +39,9 @@ MAX_TOKENS = 8192
 OUTPUT_FILE = Path(__file__).parent / "dataset.jsonl"
 PROMPTS_FILE = Path(__file__).parent / "prompts.jsonl"
 
-# Delay between API calls to stay within rate limits.
-API_DELAY = 1.0
+# Number of prompts to process concurrently.
+# 5 workers = ~10 API calls in flight (2 per prompt), well under rate limits.
+WORKERS = 5
 
 # Retry config for transient API failures.
 MAX_RETRIES = 3
@@ -280,26 +283,29 @@ def collect():
 
     print(f"\n{total} total prompts, {done} already done, {len(remaining)} remaining")
     print(f"Models: {CHEAP_MODEL} (cheap) + {QUALITY_MODEL} (quality)")
-    print(f"Estimated time: ~{len(remaining) * 2 * API_DELAY / 60:.0f} minutes\n")
+    print(f"Workers: {WORKERS} concurrent\n")
 
-    with open(OUTPUT_FILE, "a") as f:
-        for i, prompt_entry in enumerate(remaining):
-            prompt = prompt_entry["prompt"]
-            source = prompt_entry["source"]
-            progress = f"[{done + i + 1}/{total}]"
+    # Lock protects the shared output file and the progress counter.
+    write_lock = threading.Lock()
+    completed_count = done
 
-            print(f"{progress} Sending to {CHEAP_MODEL}...")
-            cheap_response = call_anthropic(client, CHEAP_MODEL, prompt)
-            time.sleep(API_DELAY)
+    def process_prompt(prompt_entry: dict) -> None:
+        """Process a single prompt: call both models, write result to disk."""
+        nonlocal completed_count
 
-            print(f"{progress} Sending to {QUALITY_MODEL}...")
-            quality_response = call_anthropic(client, QUALITY_MODEL, prompt)
-            time.sleep(API_DELAY)
+        prompt = prompt_entry["prompt"]
+        source = prompt_entry["source"]
 
-            # Skip if either model failed.
+        cheap_response = call_anthropic(client, CHEAP_MODEL, prompt)
+        quality_response = call_anthropic(client, QUALITY_MODEL, prompt)
+
+        with write_lock:
+            completed_count += 1
+            progress = f"[{completed_count}/{total}]"
+
             if cheap_response is None or quality_response is None:
                 print(f"{progress} Skipping (one or both models failed)")
-                continue
+                return
 
             entry = {
                 "prompt": prompt,
@@ -310,15 +316,107 @@ def collect():
                 "quality_model": QUALITY_MODEL,
             }
 
-            f.write(json.dumps(entry) + "\n")
-            f.flush()  # write to disk immediately for crash safety
+            with open(OUTPUT_FILE, "a") as f:
+                f.write(json.dumps(entry) + "\n")
 
             print(f"{progress} Done (cheap: {len(cheap_response)} chars, "
                   f"quality: {len(quality_response)} chars)")
 
-    # Final summary.
-    final_count = sum(1 for _ in open(OUTPUT_FILE))
-    print(f"\nCollection complete! {final_count} entries saved to {OUTPUT_FILE}")
+    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        futures = [pool.submit(process_prompt, p) for p in remaining]
+        for future in as_completed(futures):
+            future.result()  # raises if process_prompt threw an unhandled exception
+
+    # Final summary + validation.
+    validate_dataset()
+
+
+def validate_dataset():
+    """Check the collected dataset for common issues."""
+    if not OUTPUT_FILE.exists():
+        print("No output file found — nothing to validate.")
+        return
+
+    print("\n" + "=" * 60)
+    print("DATASET VALIDATION")
+    print("=" * 60)
+
+    entries = []
+    malformed = 0
+    with open(OUTPUT_FILE) as f:
+        for i, line in enumerate(f, 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+                entries.append(entry)
+            except json.JSONDecodeError:
+                malformed += 1
+                print(f"  WARNING: malformed JSON on line {i}")
+
+    total = len(entries)
+    print(f"\nRows: {total}")
+    if malformed:
+        print(f"Malformed rows: {malformed}")
+
+    # Check for missing fields.
+    required = {"prompt", "source", "cheap_response", "quality_response"}
+    missing_fields = sum(1 for e in entries if not required.issubset(e.keys()))
+    if missing_fields:
+        print(f"WARNING: {missing_fields} rows missing required fields")
+
+    # Source distribution.
+    sources: dict[str, int] = {}
+    for e in entries:
+        src = e.get("source", "unknown")
+        sources[src] = sources.get(src, 0) + 1
+    print(f"\nSource distribution:")
+    for src, count in sorted(sources.items()):
+        print(f"  {src}: {count}")
+
+    # Response length stats.
+    short_cheap = []
+    short_quality = []
+    for e in entries:
+        if len(e.get("cheap_response", "")) < 50:
+            short_cheap.append(e["prompt"][:60])
+        if len(e.get("quality_response", "")) < 50:
+            short_quality.append(e["prompt"][:60])
+
+    if short_cheap:
+        print(f"\nWARNING: {len(short_cheap)} cheap responses under 50 chars:")
+        for p in short_cheap[:5]:
+            print(f"  - {p}...")
+    if short_quality:
+        print(f"\nWARNING: {len(short_quality)} quality responses under 50 chars:")
+        for p in short_quality[:5]:
+            print(f"  - {p}...")
+
+    # Duplicate prompts.
+    seen = set()
+    dupes = 0
+    for e in entries:
+        p = e["prompt"]
+        if p in seen:
+            dupes += 1
+        seen.add(p)
+    if dupes:
+        print(f"\nWARNING: {dupes} duplicate prompts")
+
+    # Summary.
+    avg_cheap = sum(len(e.get("cheap_response", "")) for e in entries) / max(total, 1)
+    avg_quality = sum(len(e.get("quality_response", "")) for e in entries) / max(total, 1)
+    print(f"\nAvg response length:")
+    print(f"  Cheap:   {avg_cheap:.0f} chars")
+    print(f"  Quality: {avg_quality:.0f} chars")
+
+    if not malformed and not missing_fields and not dupes:
+        print(f"\nAll checks passed. {total} entries ready for labeling.")
+    else:
+        print(f"\nValidation found issues — review warnings above.")
+
+    print("=" * 60)
 
 
 if __name__ == "__main__":
