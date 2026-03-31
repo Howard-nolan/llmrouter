@@ -419,3 +419,26 @@ Cache/embedding errors are non-fatal — logged and skipped so the provider path
 - The Haiku vs Sonnet quality gap is well-suited for classifier training — similar capability spread to Flash-Lite vs Pro. The classifier learns "is this prompt too hard for the cheap model" regardless of model family.
 - `anthropic` SDK added as a dependency in `training/pyproject.toml`.
 
+
+## 2026-03-31 - PR #21: Add concurrent collection, validation, and LLM-as-judge labeling
+
+**Change Summary:**
+- Added concurrency (5 ThreadPoolExecutor workers) to `collect_dataset.py`, reducing collection time from ~92 minutes to ~18 minutes for 500 prompts
+- Added `validate_dataset()` that runs automatically after collection — checks for malformed JSON, missing fields, source distribution, short responses, and duplicates
+- Created `label_quality.py` (Phase 2): sends cheap + quality responses to Gemini 2.5 Pro as an LLM judge with a rubric to produce binary labels (0=cheap adequate, 1=needs expensive)
+
+**How It Works:**
+**Concurrent collection:** `ThreadPoolExecutor` runs 5 prompts in parallel. Each prompt still calls Haiku then Sonnet sequentially within its thread. A `threading.Lock` protects the shared output file and progress counter. Removed `API_DELAY` sleeps — at 5 workers (~10 RPM), well under Anthropic rate limits; retry backoff handles any 429s.
+
+**Dataset validation:** `validate_dataset()` reads `dataset.jsonl` and reports: row count, malformed JSON lines, missing required fields, source distribution (dolly/openassistant/mmlu/humaneval), responses under 50 chars (with prompt preview), duplicate prompts, and average response lengths. Runs automatically at end of collection but can also be called standalone.
+
+**LLM-as-judge labeling:** `label_quality.py` reads `dataset.jsonl`, sends each entry's cheap and quality responses to Gemini 2.5 Pro with a rubric. Responses are clearly labeled as "Cheap Model Response" and "Expensive Model Response" — the judge decides if the cheap response is adequate (label=0) or if the expensive model is needed (label=1). Uses `thinking_budget=4096` for genuine reasoning on quality judgments. `response_mime_type="application/json"` forces valid JSON output. 8 concurrent workers with the same ThreadPoolExecutor + Lock pattern. Resumable via `load_existing_labels()`.
+
+**Additional Notes:**
+- Week 5 of the implementation plan (Complexity Classifier Training)
+- Initially implemented A/B response randomization to prevent positional bias in judge, but removed it after evaluation showed it confused the judge model — clear "cheap"/"expensive" labels produced better reasoning
+- Dataset collection produced 499/500 entries with healthy source distribution and response lengths
+- First labeling run showed 65/35 split (adequate/needs expensive) — reasonable distribution for classifier training
+- Spot-check of 6 labeled examples (3 per class) confirmed judge accuracy, with label=1 borderline cases being conservative (routes more to expensive model, doesn't hurt quality)
+- Still TODO for Week 5: `train_classifier.py` (MLP training) and `export_onnx.py` (ONNX export)
+
