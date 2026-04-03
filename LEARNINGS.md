@@ -442,3 +442,27 @@ Cache/embedding errors are non-fatal — logged and skipped so the provider path
 - Spot-check of 6 labeled examples (3 per class) confirmed judge accuracy, with label=1 borderline cases being conservative (routes more to expensive model, doesn't hurt quality)
 - Still TODO for Week 5: `train_classifier.py` (MLP training) and `export_onnx.py` (ONNX export)
 
+
+## 2026-04-03 - PR #22: Add complexity classifier training (MLP + GBT)
+
+**Change Summary:**
+- Added `training/train_classifier.py` — trains two binary classifiers (PyTorch MLP and scikit-learn Gradient Boosted Trees) on labeled prompt embeddings to predict whether a prompt needs the expensive model or the cheap model is adequate.
+- Added `scikit-learn` dependency to `training/pyproject.toml` and updated lockfile.
+- Added `training/*.joblib` to `.gitignore` for GBT checkpoint files.
+
+**How It Works:**
+1. Loads 499 labeled prompts from `labeled_dataset.jsonl` (produced by `label_quality.py`).
+2. Computes 384-dim embeddings using `all-MiniLM-L6-v2` via `sentence-transformers`.
+3. Stratified 80/20 train/val split preserving label distribution (72/28 adequate/needs-expensive).
+4. **MLP path:** Extracts 7 handcrafted features (char count, word count, sentence count, question marks, avg word length, newlines, has-code), standardizes them, concatenates with embeddings (391-dim input), trains a `391 → 64 → 1` MLP with BCE loss, pos_weight for class imbalance, early stopping, and LR scheduling.
+5. **GBT path:** Trains a `GradientBoostingClassifier` on embeddings only (384-dim). Uses 100 estimators, max_depth=5, subsample=0.8, min_samples_leaf=5.
+6. Sweeps decision thresholds (0.20–0.80) on the best model to show the full precision/recall tradeoff curve.
+7. Saves both checkpoints: `.pt` (MLP) and `.joblib` (GBT).
+
+**Additional Notes:**
+- **Week 5** of the implementation plan (complexity classifier training).
+- GBT consistently outperforms MLP on this small dataset (0.768 vs 0.667 val accuracy). Both are included as learning artifacts — the MLP training journey explored overfitting, regularization (dropout, batchnorm, weight decay, early stopping), and the limits of neural networks on small datasets.
+- Feature importance analysis showed embeddings carry 94% of signal; handcrafted features contribute minimally. The GBT uses embeddings only.
+- Best GBT accuracy (0.768) only narrowly beats the majority-class baseline (0.727). The fundamental challenge is that `all-MiniLM-L6-v2` encodes semantic similarity (topic), not task complexity. Threshold tuning in Week 8 and/or rule-based routing are potential paths forward.
+- `export_onnx.py` (ONNX export for Go inference) is the remaining Week 5 task — deferred pending a decision on final model choice.
+
