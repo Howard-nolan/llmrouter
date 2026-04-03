@@ -2557,6 +2557,7 @@ dependencies = [
     { name = "google-generativeai" },
     { name = "onnx" },
     { name = "python-dotenv" },
+    { name = "scikit-learn" },
     { name = "sentence-transformers" },
     { name = "torch" },
 ]
@@ -2569,6 +2570,7 @@ requires-dist = [
     { name = "google-generativeai", specifier = ">=0.8.6" },
     { name = "onnx", specifier = ">=1.20.1" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
+    { name = "scikit-learn", specifier = ">=1.6.0" },
     { name = "sentence-transformers", specifier = ">=5.3.0" },
     { name = "torch", specifier = ">=2.10.0" },
 ]
