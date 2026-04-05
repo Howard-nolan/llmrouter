@@ -4,19 +4,20 @@ train_classifier.py — Phase 3 of the complexity classifier pipeline.
 Trains two models on labeled prompt data to predict whether a prompt needs
 an expensive model (label=1) or the cheap model is adequate (label=0):
 
-  1. MLP (PyTorch): 391 → 64 → 1, BCE loss, embeddings + handcrafted features
-  2. GBT (scikit-learn): Gradient Boosted Trees on embeddings only
+  1. MLP (PyTorch): 384 → 64 → 32 → 1, BCE loss, embeddings only
+  2. GBT (scikit-learn): Gradient Boosted Trees on embeddings + complexity features
 
-Both are trained and compared. The GBT consistently outperforms the MLP on
-this small dataset (~500 samples). See /obsidian_vault doc for the full
-training journey and analysis.
+Both use embeddings from all-MiniLM-L6-v2. The GBT additionally receives
+handcrafted complexity features (sub-task count, constraint count, reasoning
+keywords, etc.) that target task difficulty rather than topic. Each model
+gets a threshold sweep to find the best F1 operating point.
 
 Usage:
     uv run python train_classifier.py
 
 Outputs:
     training/complexity_classifier.pt          — MLP checkpoint
-    training/complexity_classifier_gbt.joblib  — GBT checkpoint (best model)
+    training/complexity_classifier_gbt.joblib  — GBT checkpoint
 """
 
 import copy
@@ -44,13 +45,12 @@ GBT_CHECKPOINT = Path(__file__).parent / "complexity_classifier_gbt.joblib"
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 EMBEDDING_DIM = 384
 
-# Handcrafted features (used by MLP only).
-NUM_HANDCRAFTED = 7
-MLP_INPUT_DIM = EMBEDDING_DIM + NUM_HANDCRAFTED  # 391
-MLP_HIDDEN = 64
+MLP_INPUT_DIM = EMBEDDING_DIM  # 384 — embeddings only (attempt 3 architecture)
+MLP_HIDDEN1 = 64
+MLP_HIDDEN2 = 32
 
 # MLP training hyperparameters.
-MLP_LEARNING_RATE = 1e-3
+MLP_LEARNING_RATE = 1e-4
 MLP_WEIGHT_DECAY = 1e-4
 MLP_EPOCHS = 500
 MLP_BATCH_SIZE = 32
@@ -83,14 +83,18 @@ set_seed(SEED)
 
 
 class ComplexityClassifier(nn.Module):
-    """Single hidden layer MLP: (embedding + features) → hidden → prediction."""
+    """Two hidden layer MLP: embedding → 64 → 32 → prediction (attempt 3 architecture)."""
 
     def __init__(self, input_dim: int = MLP_INPUT_DIM):
         super().__init__()
         self.network = nn.Sequential(
-            nn.Linear(input_dim, MLP_HIDDEN),
+            nn.Linear(input_dim, MLP_HIDDEN1),
             nn.ReLU(),
-            nn.Linear(MLP_HIDDEN, 1),
+            nn.Dropout(0.3),
+            nn.Linear(MLP_HIDDEN1, MLP_HIDDEN2),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(MLP_HIDDEN2, 1),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -98,40 +102,101 @@ class ComplexityClassifier(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# Feature extraction (used by MLP only)
+# Complexity features (used by GBT only)
 # ---------------------------------------------------------------------------
 
-CODE_PATTERN = re.compile(r"```|(?:^    \S)", re.MULTILINE)
+# Phrases that signal multi-step instructions.
+SUBTASK_PATTERNS = re.compile(
+    r"\b(first|then|next|finally|additionally|after that|also|second|third|lastly)\b",
+    re.IGNORECASE,
+)
 
-FEATURE_NAMES = [
-    "char_count", "word_count", "sentence_count", "question_mark_count",
-    "avg_word_length", "newline_count", "has_code",
+# Phrases that signal constrained tasks.
+CONSTRAINT_PATTERNS = re.compile(
+    r"\b(without|must not|must be|at least|at most|exactly|make sure|no more than|"
+    r"do not|don't|should not|cannot|ensure that|in under|less than|greater than)\b",
+    re.IGNORECASE,
+)
+
+# Words that signal analytical/reasoning depth.
+REASONING_PATTERNS = re.compile(
+    r"\b(compare|contrast|analyze|evaluate|explain why|explain how|tradeoffs?|trade-offs?|"
+    r"pros and cons|implications|prove|derive|justify|critique|assess|distinguish|"
+    r"advantages|disadvantages|differences? between)\b",
+    re.IGNORECASE,
+)
+
+# Code block detection.
+CODE_BLOCK_PATTERN = re.compile(r"```")
+
+# Verbs commonly starting imperative sentences.
+IMPERATIVE_STARTS = re.compile(
+    r"^(write|create|build|implement|design|explain|describe|list|find|calculate|"
+    r"solve|prove|show|demonstrate|convert|translate|optimize|refactor|debug|fix|"
+    r"analyze|compare|evaluate|generate|make|define|summarize|outline)",
+    re.IGNORECASE,
+)
+
+# Verbs that indicate working with existing code (harder tasks).
+CODE_ACTION_PATTERNS = re.compile(
+    r"\b(fix|debug|optimize|refactor|explain|improve|review|what('s| is) wrong)\b",
+    re.IGNORECASE,
+)
+
+COMPLEXITY_FEATURE_NAMES = [
+    "subtask_count",
+    "constraint_count",
+    "reasoning_keyword_count",
+    "question_count",
+    "code_task_type",
+    "imperative_density",
 ]
 
 
-def extract_features(prompt: str) -> list[float]:
-    """Extract handcrafted complexity signals from prompt text."""
-    words = prompt.split()
-    sentences = [s for s in re.split(r"[.!?]+", prompt) if s.strip()]
+def extract_complexity_features(prompt: str) -> list[float]:
+    """Extract features that target task complexity rather than topic."""
+    subtask_count = len(SUBTASK_PATTERNS.findall(prompt))
+    constraint_count = len(CONSTRAINT_PATTERNS.findall(prompt))
+    reasoning_count = len(REASONING_PATTERNS.findall(prompt))
+    question_count = prompt.count("?")
+
+    # Code task type: 0 = no code, 1 = asks to write code, 2 = provides code + action verb.
+    has_code_block = bool(CODE_BLOCK_PATTERN.search(prompt))
+    has_code_action = bool(CODE_ACTION_PATTERNS.search(prompt))
+    if has_code_block and has_code_action:
+        code_task_type = 2.0
+    elif has_code_block or "```" in prompt:
+        code_task_type = 1.0
+    else:
+        code_task_type = 0.0
+
+    # Imperative density: fraction of sentences starting with a command verb.
+    sentences = [s.strip() for s in re.split(r"[.!?\n]+", prompt) if s.strip()]
+    if sentences:
+        imperative_count = sum(1 for s in sentences if IMPERATIVE_STARTS.match(s))
+        imperative_density = imperative_count / len(sentences)
+    else:
+        imperative_density = 0.0
 
     return [
-        float(len(prompt)),
-        float(len(words)),
-        float(len(sentences)),
-        float(prompt.count("?")),
-        float(np.mean([len(w) for w in words]) if words else 0),
-        float(prompt.count("\n")),
-        float(1 if CODE_PATTERN.search(prompt) else 0),
+        float(subtask_count),
+        float(constraint_count),
+        float(reasoning_count),
+        float(question_count),
+        code_task_type,
+        imperative_density,
     ]
 
 
-def extract_all_features(prompts: list[str]) -> np.ndarray:
-    """Extract features for all prompts. Returns (N, 7) array."""
-    features = np.array([extract_features(p) for p in prompts], dtype=np.float32)
-    print(f"\nHandcrafted features shape: {features.shape}")
-    for i, name in enumerate(FEATURE_NAMES):
+def extract_all_complexity_features(prompts: list[str]) -> np.ndarray:
+    """Extract complexity features for all prompts. Returns (N, 6) array."""
+    features = np.array(
+        [extract_complexity_features(p) for p in prompts], dtype=np.float32
+    )
+    print(f"\nComplexity features shape: {features.shape}")
+    for i, name in enumerate(COMPLEXITY_FEATURE_NAMES):
         col = features[:, i]
-        print(f"  {name:>22s}: mean={col.mean():.1f}  std={col.std():.1f}  "
+        print(f"  {name:>25s}: mean={col.mean():.2f}  std={col.std():.2f}  "
               f"min={col.min():.0f}  max={col.max():.0f}")
     return features
 
@@ -315,6 +380,49 @@ def evaluate_mlp(model: ComplexityClassifier, X_val: torch.Tensor, y_val: torch.
     print(f"  Confusion: TP={tp} FP={fp} FN={fn} TN={tn}")
 
 
+def sweep_mlp_thresholds(
+    model: ComplexityClassifier, X_val: torch.Tensor, y_val: torch.Tensor,
+) -> float:
+    """Sweep decision thresholds on the MLP and return best-F1 threshold."""
+    model.eval()
+    with torch.no_grad():
+        probs = torch.sigmoid(model(X_val)).squeeze().numpy()
+
+    y = y_val.squeeze().numpy()
+
+    print("\n  Threshold sweep:")
+    print(f"  {'Thresh':>7s}  {'Acc':>5s}  {'Prec':>5s}  {'Recall':>6s}  {'F1':>5s}  "
+          f"{'TP':>3s}  {'FP':>3s}  {'FN':>3s}  {'TN':>3s}")
+    print("  " + "-" * 62)
+
+    best_f1 = 0.0
+    best_threshold = 0.5
+
+    for threshold in np.arange(0.20, 0.81, 0.05):
+        preds = (probs >= threshold).astype(int)
+        tp = int(((preds == 1) & (y == 1)).sum())
+        fp = int(((preds == 1) & (y == 0)).sum())
+        fn = int(((preds == 0) & (y == 1)).sum())
+        tn = int(((preds == 0) & (y == 0)).sum())
+
+        acc = (tp + tn) / len(y)
+        prec = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        rec = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        f1 = 2 * prec * rec / (prec + rec) if (prec + rec) > 0 else 0.0
+
+        marker = ""
+        if f1 > best_f1:
+            best_f1 = f1
+            best_threshold = threshold
+            marker = " *"
+
+        print(f"  {threshold:>7.2f}  {acc:>5.3f}  {prec:>5.3f}  {rec:>6.3f}  {f1:>5.3f}  "
+              f"{tp:>3d}  {fp:>3d}  {fn:>3d}  {tn:>3d}{marker}")
+
+    print(f"\n  Best F1: {best_f1:.3f} at threshold {best_threshold:.2f}")
+    return best_threshold
+
+
 # ---------------------------------------------------------------------------
 # GBT training
 # ---------------------------------------------------------------------------
@@ -326,7 +434,7 @@ def train_gbt(
     X_val: np.ndarray,
     y_val: np.ndarray,
 ) -> GradientBoostingClassifier:
-    """Train a Gradient Boosted Classifier on embeddings only."""
+    """Train a Gradient Boosted Classifier on embeddings + complexity features."""
     print(f"\n  Config: n_estimators={GBT_N_ESTIMATORS}, max_depth={GBT_MAX_DEPTH}, "
           f"lr={GBT_LEARNING_RATE}, subsample={GBT_SUBSAMPLE}, "
           f"min_samples_leaf={GBT_MIN_SAMPLES_LEAF}")
@@ -410,7 +518,7 @@ def main():
 
     prompts, labels = load_dataset()
     embeddings = compute_embeddings(prompts)
-    features = extract_all_features(prompts)
+    complexity_features = extract_all_complexity_features(prompts)
 
     train_idx, val_idx = stratified_split(labels)
     y_train_np = np.array([labels[i] for i in train_idx])
@@ -421,39 +529,42 @@ def main():
 
     pos_weight = compute_class_weight(labels)
 
-    # --- Build MLP input (embeddings + standardized handcrafted features) ---
-    train_feat = features[train_idx]
-    feat_mean = train_feat.mean(axis=0)
-    feat_std = train_feat.std(axis=0)
-    feat_std[feat_std == 0] = 1.0
-
-    mlp_X_train = np.concatenate([embeddings[train_idx], (features[train_idx] - feat_mean) / feat_std], axis=1)
-    mlp_X_val = np.concatenate([embeddings[val_idx], (features[val_idx] - feat_mean) / feat_std], axis=1)
-
-    X_train_t = torch.tensor(mlp_X_train, dtype=torch.float32)
+    # MLP uses embeddings only.
+    X_train_t = torch.tensor(embeddings[train_idx], dtype=torch.float32)
     y_train_t = torch.tensor(y_train_np, dtype=torch.float32).unsqueeze(1)
-    X_val_t = torch.tensor(mlp_X_val, dtype=torch.float32)
+    X_val_t = torch.tensor(embeddings[val_idx], dtype=torch.float32)
     y_val_t = torch.tensor(y_val_np, dtype=torch.float32).unsqueeze(1)
 
-    # --- GBT input (embeddings only) ---
-    gbt_X_train = embeddings[train_idx]
-    gbt_X_val = embeddings[val_idx]
+    # GBT uses embeddings + complexity features.
+    gbt_X_train = np.concatenate([embeddings[train_idx], complexity_features[train_idx]], axis=1)
+    gbt_X_val = np.concatenate([embeddings[val_idx], complexity_features[val_idx]], axis=1)
 
     # ===== MODEL 1: MLP =====
     print("\n" + "=" * 60)
-    print("MODEL 1: MLP (embeddings + handcrafted features)")
+    print("MODEL 1: MLP (384 → 64 → 32 → 1, embeddings only)")
     print("=" * 60)
 
     mlp_model, mlp_result = train_mlp(X_train_t, y_train_t, X_val_t, y_val_t, pos_weight)
     evaluate_mlp(mlp_model, X_val_t, y_val_t)
+    mlp_best_threshold = sweep_mlp_thresholds(mlp_model, X_val_t, y_val_t)
 
     # ===== MODEL 2: GBT =====
     print("\n" + "=" * 60)
-    print("MODEL 2: Gradient Boosted Trees (embeddings only)")
+    print("MODEL 2: GBT (embeddings + complexity features)")
     print("=" * 60)
 
     gbt_model = train_gbt(gbt_X_train, y_train_np, gbt_X_val, y_val_np)
-    best_threshold = sweep_thresholds(gbt_model, gbt_X_val, y_val_np)
+
+    # Print feature importance breakdown: embeddings vs complexity features.
+    importances = gbt_model.feature_importances_
+    emb_importance = importances[:EMBEDDING_DIM].sum()
+    feat_importance = importances[EMBEDDING_DIM:].sum()
+    print(f"\n  Feature importance — embeddings: {emb_importance:.3f}, "
+          f"complexity features: {feat_importance:.3f}")
+    for i, name in enumerate(COMPLEXITY_FEATURE_NAMES):
+        print(f"    {name:>25s}: {importances[EMBEDDING_DIM + i]:.4f}")
+
+    gbt_best_threshold = sweep_thresholds(gbt_model, gbt_X_val, y_val_np)
 
     # ===== COMPARISON =====
     gbt_acc = accuracy_score(y_val_np, gbt_model.predict(gbt_X_val))
@@ -464,32 +575,28 @@ def main():
 
     # ===== SAVE CHECKPOINTS =====
 
-    # MLP checkpoint.
     torch.save(
         {
             "model_state_dict": mlp_result["state_dict"],
             "val_acc": mlp_result["val_acc"],
             "epoch": mlp_result["epoch"],
+            "best_threshold": float(mlp_best_threshold),
             "embedding_model": EMBEDDING_MODEL,
             "embedding_dim": EMBEDDING_DIM,
-            "num_handcrafted_features": NUM_HANDCRAFTED,
-            "feature_names": FEATURE_NAMES,
-            "feature_mean": feat_mean,
-            "feature_std": feat_std,
-            "architecture": f"{MLP_INPUT_DIM} → {MLP_HIDDEN} → 1",
+            "architecture": f"{MLP_INPUT_DIM} → {MLP_HIDDEN1} → {MLP_HIDDEN2} → 1",
         },
         MLP_CHECKPOINT,
     )
     print(f"\nMLP checkpoint saved to {MLP_CHECKPOINT}")
 
-    # GBT checkpoint.
     joblib.dump(
         {
             "model": gbt_model,
             "val_acc": gbt_acc,
-            "best_threshold": best_threshold,
+            "best_threshold": float(gbt_best_threshold),
             "embedding_model": EMBEDDING_MODEL,
             "embedding_dim": EMBEDDING_DIM,
+            "complexity_feature_names": COMPLEXITY_FEATURE_NAMES,
         },
         GBT_CHECKPOINT,
     )

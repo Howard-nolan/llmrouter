@@ -1,10 +1,11 @@
 """
 collect_dataset.py — Phase 1 of the complexity classifier pipeline.
 
-Samples ~500 diverse prompts from four public datasets (Dolly, OpenAssistant,
-MMLU, HumanEval), sends each to both a cheap model (claude-haiku-4-5-20251001)
-and a quality model (claude-sonnet-4-5-20250929), and saves the prompt + both
-responses as JSONL.
+Samples ~2500 diverse prompts from eight public datasets, sends each to both
+a cheap model (claude-haiku-4-5-20251001) and a quality model
+(claude-sonnet-4-5-20250929), and saves the prompt + both responses as JSONL.
+
+Supports resumability — re-running skips already-completed prompts.
 
 Usage:
     uv run python collect_dataset.py
@@ -40,8 +41,11 @@ OUTPUT_FILE = Path(__file__).parent / "dataset.jsonl"
 PROMPTS_FILE = Path(__file__).parent / "prompts.jsonl"
 
 # Number of prompts to process concurrently.
-# 5 workers = ~10 API calls in flight (2 per prompt), well under rate limits.
-WORKERS = 5
+# 4 workers = ~8 API calls in flight (2 per prompt), still well under rate limits.
+WORKERS = 4
+
+# Small delay (seconds) after each prompt completes to stay under rate limits.
+INTER_PROMPT_DELAY = 0.25
 
 # Retry config for transient API failures.
 MAX_RETRIES = 3
@@ -54,7 +58,7 @@ SEED = 42
 # ---------------------------------------------------------------------------
 
 
-def sample_openassistant(n: int = 150) -> list[dict]:
+def sample_openassistant(n: int = 400) -> list[dict]:
     """
     Sample real user prompts from OpenAssistant (oasst2).
 
@@ -85,7 +89,7 @@ def sample_openassistant(n: int = 150) -> list[dict]:
     return candidates[:n]
 
 
-def sample_mmlu(n: int = 100) -> list[dict]:
+def sample_mmlu(n: int = 350) -> list[dict]:
     """
     Sample knowledge/reasoning questions from MMLU.
 
@@ -135,7 +139,7 @@ def sample_humaneval(n: int = 50) -> list[dict]:
     return candidates[:n]
 
 
-def sample_dolly(n: int = 200) -> list[dict]:
+def sample_dolly(n: int = 500) -> list[dict]:
     """
     Sample curated instructions from Dolly.
 
@@ -156,11 +160,107 @@ def sample_dolly(n: int = 200) -> list[dict]:
         else:
             prompt = instruction
 
-        # Skip very short instructions.
         if len(prompt) < 20:
             continue
 
         candidates.append({"prompt": prompt, "source": "dolly"})
+
+    random.shuffle(candidates)
+    return candidates[:n]
+
+
+def sample_mbpp(n: int = 200) -> list[dict]:
+    """
+    Sample Python coding problems from MBPP (Mostly Basic Python Problems).
+
+    Each entry has a natural-language task description. Difficulty ranges from
+    basic string manipulation to algorithmic problems.
+    """
+    print(f"Loading MBPP (sampling {n})...")
+    ds = load_dataset("google-research-datasets/mbpp", "full", split="train")
+
+    candidates = []
+    for row in ds:
+        prompt = row["text"].strip()
+        if len(prompt) < 20:
+            continue
+        instruction = f"Write a Python function for the following task:\n\n{prompt}"
+        candidates.append({"prompt": instruction, "source": "mbpp"})
+
+    random.shuffle(candidates)
+    return candidates[:n]
+
+
+def sample_gsm8k(n: int = 200) -> list[dict]:
+    """
+    Sample math word problems from GSM8K.
+
+    Multi-step arithmetic reasoning problems. Structurally simple but require
+    chain-of-thought reasoning — interesting edge cases for complexity.
+    """
+    print(f"Loading GSM8K (sampling {n})...")
+    ds = load_dataset("openai/gsm8k", "main", split="train")
+
+    candidates = []
+    for row in ds:
+        prompt = row["question"].strip()
+        if len(prompt) < 20:
+            continue
+        candidates.append({"prompt": prompt, "source": "gsm8k"})
+
+    random.shuffle(candidates)
+    return candidates[:n]
+
+
+def sample_arc_challenge(n: int = 200) -> list[dict]:
+    """
+    Sample science reasoning questions from ARC (Challenge split).
+
+    Multiple-choice science questions curated to be difficult for statistical
+    models — requires genuine reasoning, not pattern matching.
+    """
+    print(f"Loading ARC Challenge (sampling {n})...")
+    ds = load_dataset("allenai/ai2_arc", "ARC-Challenge", split="train")
+
+    candidates = []
+    for row in ds:
+        question = row["question"].strip()
+        choices = row["choices"]
+
+        formatted = question + "\n"
+        for label, text in zip(choices["label"], choices["text"]):
+            formatted += f"\n{label}. {text}"
+
+        candidates.append({"prompt": formatted, "source": "arc_challenge"})
+
+    random.shuffle(candidates)
+    return candidates[:n]
+
+
+def sample_alpaca(n: int = 600) -> list[dict]:
+    """
+    Sample instruction-following prompts from Alpaca.
+
+    52k diverse instructions across a wide range of tasks. Some have an
+    additional "input" field providing context for the instruction.
+    """
+    print(f"Loading Alpaca (sampling {n})...")
+    ds = load_dataset("tatsu-lab/alpaca", split="train")
+
+    candidates = []
+    for row in ds:
+        instruction = row["instruction"].strip()
+        context = row.get("input", "").strip()
+
+        if context:
+            prompt = f"{instruction}\n\nInput:\n{context}"
+        else:
+            prompt = instruction
+
+        if len(prompt) < 20:
+            continue
+
+        candidates.append({"prompt": prompt, "source": "alpaca"})
 
     random.shuffle(candidates)
     return candidates[:n]
@@ -263,10 +363,14 @@ def collect():
                     prompts.append(json.loads(line))
     else:
         prompts = []
-        prompts.extend(sample_dolly(200))
-        prompts.extend(sample_openassistant(150))
-        prompts.extend(sample_mmlu(100))
-        prompts.extend(sample_humaneval(50))
+        prompts.extend(sample_dolly())
+        prompts.extend(sample_openassistant())
+        prompts.extend(sample_mmlu())
+        prompts.extend(sample_humaneval())
+        prompts.extend(sample_mbpp())
+        prompts.extend(sample_gsm8k())
+        prompts.extend(sample_arc_challenge())
+        prompts.extend(sample_alpaca())
         random.shuffle(prompts)
 
         # Save prompts for reproducibility.
@@ -298,6 +402,7 @@ def collect():
 
         cheap_response = call_anthropic(client, CHEAP_MODEL, prompt)
         quality_response = call_anthropic(client, QUALITY_MODEL, prompt)
+        time.sleep(INTER_PROMPT_DELAY)
 
         with write_lock:
             completed_count += 1
