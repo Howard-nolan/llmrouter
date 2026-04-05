@@ -18,6 +18,7 @@ Requires GOOGLE_API_KEY environment variable.
 import json
 import os
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -38,7 +39,8 @@ THINKING_BUDGET = 4096
 INPUT_FILE = Path(__file__).parent / "dataset.jsonl"
 OUTPUT_FILE = Path(__file__).parent / "labeled_dataset.jsonl"
 
-WORKERS = 8
+WORKERS = 5
+INTER_PROMPT_DELAY = 0.25
 
 MAX_RETRIES = 3
 RETRY_BACKOFF = 2.0
@@ -123,7 +125,6 @@ def judge_prompt(
             wait = RETRY_BACKOFF**attempt
             print(f"  Attempt {attempt + 1}/{MAX_RETRIES} failed ({e}), "
                   f"retrying in {wait:.0f}s...")
-            import time
             time.sleep(wait)
 
     return None
@@ -194,6 +195,7 @@ def label():
             entry["cheap_response"],
             entry["quality_response"],
         )
+        time.sleep(INTER_PROMPT_DELAY)
 
         with write_lock:
             completed_count += 1
