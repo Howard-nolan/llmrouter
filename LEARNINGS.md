@@ -466,3 +466,26 @@ Cache/embedding errors are non-fatal — logged and skipped so the provider path
 - Best GBT accuracy (0.768) only narrowly beats the majority-class baseline (0.727). The fundamental challenge is that `all-MiniLM-L6-v2` encodes semantic similarity (topic), not task complexity. Threshold tuning in Week 8 and/or rule-based routing are potential paths forward.
 - `export_onnx.py` (ONNX export for Go inference) is the remaining Week 5 task — deferred pending a decision on final model choice.
 
+
+## 2026-04-05 - PR #23: Add complexity features, expand dataset, refine classifier training
+
+**Change Summary:**
+- Decided on GBT as the model to ship (better probability calibration for threshold tuning, data-efficient for small datasets). MLP kept as comparison baseline.
+- Reverted MLP to attempt 3 architecture (384→64→32→1, embeddings only, LR 1e-4) and added threshold sweep — confirmed MLP probabilities cluster uselessly around 0.5 while GBT produces a real precision/recall curve.
+- Replaced shallow handcrafted features (char_count, word_count — 6% importance) with 6 complexity-targeting features for GBT: subtask count, constraint count, reasoning keywords, question count, code task type, imperative density.
+- Expanded dataset collection from 4 sources (~500 prompts) to 8 sources (~2500 prompts) by adding MBPP, GSM8K, ARC Challenge, and Alpaca datasets.
+- Added rate limit protection across collection and labeling scripts (reduced workers, inter-prompt delays).
+
+**How It Works:**
+- `train_classifier.py` trains both models on the same labeled dataset. MLP gets embeddings only (384-dim); GBT gets embeddings + 6 complexity features (390-dim). Both get threshold sweeps. GBT prints feature importance breakdown showing how much signal comes from embeddings vs handcrafted features.
+- New complexity features use regex pattern matching to detect structural signals: multi-step instructions ("first", "then"), constraints ("without", "must not"), reasoning keywords ("compare", "tradeoffs"), code task type (0=none, 1=write, 2=debug/optimize), and imperative sentence density. These target task difficulty directly rather than topic.
+- `collect_dataset.py` now samples from 8 HuggingFace datasets (Dolly 500, OpenAssistant 400, MMLU 350, HumanEval 50, MBPP 200, GSM8K 200, ARC Challenge 200, Alpaca 600). Resumability preserves existing collected data.
+- `label_quality.py` workers reduced from 8→5 with 0.25s delay for rate limit safety at higher volume.
+
+**Additional Notes:**
+- Week 5 of the project plan. Data collection (~2000 new prompts) and re-labeling are in progress — this PR ships the pipeline changes; retraining on the full ~2500 dataset happens once collection/labeling complete.
+- Key finding from threshold sweep comparison: MLP outputs cliff between 0.45→0.50 (all-1 to all-0 predictions), making it untunable. GBT probabilities spread across the range, enabling a real precision/recall tradeoff.
+- Original handcrafted features (char_count, word_count, has_code) contributed only 6% of GBT feature importance because they don't correlate with complexity. New features are designed based on this analysis.
+- The 6 complexity features are cheap to compute (~microseconds of regex) and will need equivalent Go implementations for gateway inference in Week 6.
+- `export_onnx.py` (GBT → ONNX via skl2onnx) deferred until retraining on full dataset completes.
+
