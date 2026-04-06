@@ -19,22 +19,31 @@ type Embedder interface {
 	Embed(text string) ([]float32, error)
 }
 
+// ModelRouter selects a concrete model name for "auto" routing requests.
+// Defined here at the consumer to decouple the server package from the
+// router package (same pattern as Embedder above).
+type ModelRouter interface {
+	Route(embedding []float32, strategy string, providerName string) (string, error)
+}
+
 // Server holds the HTTP router and all dependencies that handlers need.
 type Server struct {
-	router   chi.Router
-	cfg      *config.Config
-	models   map[string]provider.Provider
-	embedder Embedder
-	cache    cache.Cache
+	router      chi.Router
+	cfg         *config.Config
+	models      map[string]provider.Provider
+	embedder    Embedder
+	cache       cache.Cache
+	modelRouter ModelRouter
 }
 
 // New creates a Server with all dependencies wired in.
-func New(cfg *config.Config, models map[string]provider.Provider, emb Embedder, c cache.Cache) *Server {
+func New(cfg *config.Config, models map[string]provider.Provider, emb Embedder, c cache.Cache, mr ModelRouter) *Server {
 	s := &Server{
-		cfg:      cfg,
-		models:   models,
-		embedder: emb,
-		cache:    c,
+		cfg:         cfg,
+		models:      models,
+		embedder:    emb,
+		cache:       c,
+		modelRouter: mr,
 	}
 	s.routes()
 	return s

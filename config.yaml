@@ -29,3 +29,16 @@ embedding:
   tokenizer_path: ./models/tokenizer.json
   library_path: ./lib/libonnxruntime.dylib
   dimension: 384
+
+routing:
+  default_strategy: auto
+  default_provider: anthropic
+  complexity_threshold: 0.6
+  classifier_model_path: ./models/complexity_classifier.onnx
+  providers:
+    google:
+      cheap_model: gemini-2.0-flash
+      quality_model: gemini-2.5-pro
+    anthropic:
+      cheap_model: claude-haiku-4-5-20251001
+      quality_model: claude-sonnet-4-5-20250929

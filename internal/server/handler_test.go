@@ -128,17 +128,24 @@ func setupTestServer(t *testing.T, embedFunc func(string) ([]float32, error)) *S
 
 	cfg := &config.Config{}
 
-	return New(cfg, models, emb, rc)
+	return New(cfg, models, emb, rc, nil)
 }
 
 // doRequest sends a JSON request to the server and returns the recorder.
-func doRequest(t *testing.T, srv *Server, body map[string]interface{}) *httptest.ResponseRecorder {
+func doRequest(t *testing.T, srv *Server, body map[string]interface{}, headers ...http.Header) *httptest.ResponseRecorder {
 	t.Helper()
 	jsonBody, err := json.Marshal(body)
 	require.NoError(t, err)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(jsonBody))
 	req.Header.Set("Content-Type", "application/json")
+	if len(headers) > 0 {
+		for k, vals := range headers[0] {
+			for _, v := range vals {
+				req.Header.Set(k, v)
+			}
+		}
+	}
 	w := httptest.NewRecorder()
 	srv.ServeHTTP(w, req)
 	return w
@@ -276,15 +283,8 @@ func TestXCache_SkipBypassesCache(t *testing.T) {
 	w1 := doRequest(t, srv, body)
 	assert.Equal(t, "MISS", w1.Header().Get("X-LLMRouter-Cache"))
 
-	// Same prompt with x-cache: skip — should bypass cache and miss.
-	skipBody := map[string]interface{}{
-		"model":    "test-model",
-		"messages": []map[string]string{{"role": "user", "content": "hello"}},
-		"stream":   false,
-		"x-cache":  "skip",
-	}
-
-	w2 := doRequest(t, srv, skipBody)
+	// Same prompt with X-Cache: skip — should bypass cache and miss.
+	w2 := doRequest(t, srv, body, http.Header{"X-Cache": {"skip"}})
 	assert.Equal(t, "MISS", w2.Header().Get("X-LLMRouter-Cache"))
 }
 
@@ -297,11 +297,10 @@ func TestXCache_OnlyReturns404OnMiss(t *testing.T) {
 		"model":    "test-model",
 		"messages": []map[string]string{{"role": "user", "content": "hello"}},
 		"stream":   false,
-		"x-cache":  "only",
 	}
 
 	// Nothing in cache — should get 404.
-	w := doRequest(t, srv, body)
+	w := doRequest(t, srv, body, http.Header{"X-Cache": {"only"}})
 	assert.Equal(t, http.StatusNotFound, w.Code)
 	assert.Equal(t, "MISS", w.Header().Get("X-LLMRouter-Cache"))
 
@@ -325,15 +324,8 @@ func TestXCache_OnlyReturnsCachedResponse(t *testing.T) {
 	w1 := doRequest(t, srv, body)
 	require.Equal(t, "MISS", w1.Header().Get("X-LLMRouter-Cache"))
 
-	// Same prompt with x-cache: only — should return the cached response.
-	onlyBody := map[string]interface{}{
-		"model":    "test-model",
-		"messages": []map[string]string{{"role": "user", "content": "hello"}},
-		"stream":   false,
-		"x-cache":  "only",
-	}
-
-	w2 := doRequest(t, srv, onlyBody)
+	// Same prompt with X-Cache: only — should return the cached response.
+	w2 := doRequest(t, srv, body, http.Header{"X-Cache": {"only"}})
 	assert.Equal(t, http.StatusOK, w2.Code)
 	assert.Equal(t, "HIT", w2.Header().Get("X-LLMRouter-Cache"))
 

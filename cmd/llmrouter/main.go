@@ -11,6 +11,7 @@ import (
 	"github.com/howard-nolan/llmrouter/internal/config"
 	"github.com/howard-nolan/llmrouter/internal/embedder"
 	"github.com/howard-nolan/llmrouter/internal/provider"
+	"github.com/howard-nolan/llmrouter/internal/router"
 	"github.com/howard-nolan/llmrouter/internal/server"
 )
 
@@ -93,7 +94,12 @@ func main() {
 	}
 	defer c.Close()
 
-	srv := server.New(cfg, models, emb, c)
+	// Create the model router for "auto" routing. No classifier yet —
+	// cheapest and quality strategies work, auto will error until the
+	// ONNX classifier is integrated.
+	mr := router.New(cfg.Routing, nil)
+
+	srv := server.New(cfg, models, emb, c, mr)
 
 	httpServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Server.Port),
