@@ -255,20 +255,20 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Step 2: Cache lookup.
-	// Embed the last user message and check if we have a semantically
-	// similar response cached. embedding is declared at function scope
-	// so that both Lookup (here) and Store (after provider call) can
-	// use it without recomputing.
+	// Read routing/caching control headers.
+	xCache := r.Header.Get("X-Cache")       // "auto", "skip", "only"
+	xRoute := r.Header.Get("X-Route")       // "auto", "cheapest", "quality"
+	xProvider := r.Header.Get("X-Provider") // "google", "anthropic"
+
+	// Step 2: Compute embedding.
+	// The embedding is needed for both cache lookup and auto-routing, so
+	// we compute it whenever an embedder is available — not just when
+	// caching is enabled.
+	needsRouting := req.Model == "auto"
+	cacheEnabled := s.embedder != nil && s.cache != nil && xCache != "skip"
+
 	var embedding []float32
-	cacheEnabled := s.embedder != nil && s.cache != nil
-
-	// x-cache: "skip" disables caching entirely for this request.
-	if req.XCache == "skip" {
-		cacheEnabled = false
-	}
-
-	if cacheEnabled {
+	if s.embedder != nil && (cacheEnabled || needsRouting) {
 		userMsg, err := lastUserMessage(req.Messages)
 		if err != nil {
 			w.Header().Set("Content-Type", "application/json")
@@ -281,9 +281,18 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 		embedding, err = s.embedder.Embed(userMsg)
 		if err != nil {
-			// Embedding failure is non-fatal — log and skip caching.
-			log.Printf("embedding error (skipping cache): %v", err)
+			log.Printf("embedding error: %v", err)
+			// Without an embedding, caching can't work. But routing
+			// failures are fatal — we can't pick a model without it.
 			cacheEnabled = false
+			if needsRouting {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]string{
+					"error": "failed to compute embedding for routing: " + err.Error(),
+				})
+				return
+			}
 		}
 	}
 
@@ -313,9 +322,9 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// x-cache: "only" returns 404 on a cache miss instead of calling
+	// X-Cache: "only" returns 404 on a cache miss instead of calling
 	// the provider. Useful for testing cache without spending tokens.
-	if req.XCache == "only" {
+	if xCache == "only" {
 		w.Header().Set("X-LLMRouter-Cache", "MISS")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
@@ -328,7 +337,30 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// Cache MISS (or cache disabled) — forward to the provider.
 	w.Header().Set("X-LLMRouter-Cache", "MISS")
 
-	// Step 3: Resolve the provider from the model name.
+	// Step 3: Route "auto" requests to a concrete model.
+	if req.Model == "auto" {
+		if s.modelRouter == nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error": "auto routing is not configured",
+			})
+			return
+		}
+
+		routed, err := s.modelRouter.Route(embedding, xRoute, xProvider)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error": "routing error: " + err.Error(),
+			})
+			return
+		}
+		req.Model = routed
+	}
+
+	// Step 4: Resolve the provider from the model name.
 	p, err := s.resolveProvider(req.Model)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")

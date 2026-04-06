@@ -21,6 +21,22 @@ type Config struct {
 	Providers map[string]ProviderConfig `koanf:"providers"`
 	Cache     cache.CacheConfig         `koanf:"cache"`
 	Embedding EmbeddingConfig           `koanf:"embedding"`
+	Routing   RoutingConfig             `koanf:"routing"`
+}
+
+// RoutingConfig controls how "model": "auto" requests are routed.
+type RoutingConfig struct {
+	DefaultStrategy     string                          `koanf:"default_strategy"`
+	DefaultProvider     string                          `koanf:"default_provider"`
+	ComplexityThreshold float64                         `koanf:"complexity_threshold"`
+	ClassifierModelPath string                          `koanf:"classifier_model_path"`
+	Providers           map[string]RoutingProviderConfig `koanf:"providers"`
+}
+
+// RoutingProviderConfig defines the cheap and quality model for a provider.
+type RoutingProviderConfig struct {
+	CheapModel   string `koanf:"cheap_model"`
+	QualityModel string `koanf:"quality_model"`
 }
 
 // EmbeddingConfig holds paths and settings for the ONNX embedding model.
