@@ -489,3 +489,35 @@ Cache/embedding errors are non-fatal — logged and skipped so the provider path
 - The 6 complexity features are cheap to compute (~microseconds of regex) and will need equivalent Go implementations for gateway inference in Week 6.
 - `export_onnx.py` (GBT → ONNX via skl2onnx) deferred until retraining on full dataset completes.
 
+
+## 2026-04-06 - PR #24: Add cost-aware model router with per-provider config
+
+**Change Summary:**
+- Add routing layer for `"model": "auto"` requests — Router selects a concrete model based on strategy (`auto`/`cheapest`/`quality`) and per-provider cheap/quality model pairs
+- Move `x-cache` from request body to `X-Cache` header; add `X-Route` and `X-Provider` headers for routing control
+- Define `Classifier` interface for future ONNX complexity classifier integration
+
+**How It Works:**
+When a request arrives with `"model": "auto"`, the handler calls `Router.Route(embedding, strategy, provider)` to resolve a concrete model name before dispatching to the provider.
+
+**Resolution flow:**
+1. `strategy` comes from `X-Route` header (falls back to `config.routing.default_strategy`)
+2. `providerName` comes from `X-Provider` header (falls back to `config.routing.default_provider`)
+3. Look up the provider's cheap/quality model pair from `config.routing.providers`
+4. Apply strategy: `cheapest` → cheap model, `quality` → quality model, `auto` → run classifier against threshold (errors if no classifier configured yet)
+
+**Key types:**
+- `router.Router` — holds `RoutingConfig` + optional `Classifier`, exposes `Route()` method
+- `router.Classifier` interface — `Classify(embedding []float32) (float64, error)` — to be implemented in `classifier.go` when ONNX model is ready
+- `server.ModelRouter` interface — consumer-side interface in server package (same decoupling pattern as `Embedder`)
+- `config.RoutingConfig` / `config.RoutingProviderConfig` — per-provider cheap/quality model mapping
+
+**Header migration:** `x-cache` moved from JSON body field to `X-Cache` request header. Added `X-Route` and `X-Provider` headers. Handler reads all three at the top of `handleChatCompletions`. Embedding computation refactored to run when either caching or routing needs it (previously only ran when caching was enabled).
+
+**Additional Notes:**
+- Week 6 of the implementation plan (partial — router and config done, classifier integration and cost tracking still pending)
+- `auto` strategy currently errors with "classifier not configured" — will work once the ONNX complexity classifier is exported and `classifier.go` is implemented
+- Default provider is `anthropic` since the classifier training data used Anthropic responses
+- API surface docs in obsidian vault (`llmrouter.md`) still show the old body-field approach for `x-cache`/`x-route` — should be updated in a future pass
+- 11 new unit tests for router covering all strategies, defaults fallback, provider override, and error cases
+
