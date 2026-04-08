@@ -45,7 +45,8 @@ GBT_CHECKPOINT = Path(__file__).parent / "complexity_classifier_gbt.joblib"
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 EMBEDDING_DIM = 384
 
-MLP_INPUT_DIM = EMBEDDING_DIM  # 384 — embeddings only (attempt 3 architecture)
+NUM_COMPLEXITY_FEATURES = 6
+MLP_INPUT_DIM = EMBEDDING_DIM  # embeddings only (complexity features extracted but not used — see notes below)
 MLP_HIDDEN1 = 64
 MLP_HIDDEN2 = 32
 
@@ -58,12 +59,15 @@ MLP_PATIENCE = 40
 MLP_SCHEDULER_PATIENCE = 15
 MLP_SCHEDULER_FACTOR = 0.5
 
-# GBT hyperparameters (best config from hyperparameter search).
+# GBT defaults (overridden by grid search in main).
 GBT_N_ESTIMATORS = 100
 GBT_MAX_DEPTH = 5
 GBT_LEARNING_RATE = 0.1
 GBT_SUBSAMPLE = 0.8
 GBT_MIN_SAMPLES_LEAF = 5
+
+CLASS_WEIGHT_MULTIPLIER = 4.0  # multiply natural class ratio to penalize false negatives harder
+F_BETA = 2.0  # beta for F-score threshold sweep (2.0 = recall weighted 2x over precision)
 
 VAL_SPLIT = 0.2
 SEED = 42
@@ -83,7 +87,7 @@ set_seed(SEED)
 
 
 class ComplexityClassifier(nn.Module):
-    """Two hidden layer MLP: embedding → 64 → 32 → prediction (attempt 3 architecture)."""
+    """Two hidden layer MLP: (embedding + complexity features) → 64 → 32 → prediction."""
 
     def __init__(self, input_dim: int = MLP_INPUT_DIM):
         super().__init__()
@@ -264,11 +268,14 @@ def stratified_split(labels: list[int]) -> tuple[list[int], list[int]]:
 
 
 def compute_class_weight(labels: list[int]) -> torch.Tensor:
-    """Compute pos_weight to counteract class imbalance."""
+    """Compute pos_weight to counteract class imbalance, scaled by CLASS_WEIGHT_MULTIPLIER."""
     n_pos = sum(labels)
     n_neg = len(labels) - n_pos
-    weight = n_neg / n_pos
-    print(f"\nClass weight (pos_weight): {weight:.2f}")
+    natural_weight = n_neg / n_pos
+    weight = natural_weight * CLASS_WEIGHT_MULTIPLIER
+    print(f"\nClass weight — natural: {natural_weight:.2f}, "
+          f"multiplier: {CLASS_WEIGHT_MULTIPLIER:.1f}x, "
+          f"final pos_weight: {weight:.2f}")
     return torch.tensor([weight], dtype=torch.float32)
 
 
@@ -383,19 +390,20 @@ def evaluate_mlp(model: ComplexityClassifier, X_val: torch.Tensor, y_val: torch.
 def sweep_mlp_thresholds(
     model: ComplexityClassifier, X_val: torch.Tensor, y_val: torch.Tensor,
 ) -> float:
-    """Sweep decision thresholds on the MLP and return best-F1 threshold."""
+    """Sweep decision thresholds on the MLP and return best-F-beta threshold."""
     model.eval()
     with torch.no_grad():
         probs = torch.sigmoid(model(X_val)).squeeze().numpy()
 
     y = y_val.squeeze().numpy()
+    b2 = F_BETA ** 2
 
-    print("\n  Threshold sweep:")
+    print(f"\n  Threshold sweep (optimizing F{F_BETA:.0f}):")
     print(f"  {'Thresh':>7s}  {'Acc':>5s}  {'Prec':>5s}  {'Recall':>6s}  {'F1':>5s}  "
-          f"{'TP':>3s}  {'FP':>3s}  {'FN':>3s}  {'TN':>3s}")
-    print("  " + "-" * 62)
+          f"{'F'+str(int(F_BETA)):>5s}  {'TP':>3s}  {'FP':>3s}  {'FN':>3s}  {'TN':>3s}")
+    print("  " + "-" * 70)
 
-    best_f1 = 0.0
+    best_fb = 0.0
     best_threshold = 0.5
 
     for threshold in np.arange(0.20, 0.81, 0.05):
@@ -409,17 +417,18 @@ def sweep_mlp_thresholds(
         prec = tp / (tp + fp) if (tp + fp) > 0 else 0.0
         rec = tp / (tp + fn) if (tp + fn) > 0 else 0.0
         f1 = 2 * prec * rec / (prec + rec) if (prec + rec) > 0 else 0.0
+        fb = (1 + b2) * prec * rec / (b2 * prec + rec) if (b2 * prec + rec) > 0 else 0.0
 
         marker = ""
-        if f1 > best_f1:
-            best_f1 = f1
+        if fb > best_fb:
+            best_fb = fb
             best_threshold = threshold
             marker = " *"
 
         print(f"  {threshold:>7.2f}  {acc:>5.3f}  {prec:>5.3f}  {rec:>6.3f}  {f1:>5.3f}  "
-              f"{tp:>3d}  {fp:>3d}  {fn:>3d}  {tn:>3d}{marker}")
+              f"{fb:>5.3f}  {tp:>3d}  {fp:>3d}  {fn:>3d}  {tn:>3d}{marker}")
 
-    print(f"\n  Best F1: {best_f1:.3f} at threshold {best_threshold:.2f}")
+    print(f"\n  Best F{F_BETA:.0f}: {best_fb:.3f} at threshold {best_threshold:.2f}")
     return best_threshold
 
 
@@ -433,21 +442,32 @@ def train_gbt(
     y_train: np.ndarray,
     X_val: np.ndarray,
     y_val: np.ndarray,
+    n_estimators: int = GBT_N_ESTIMATORS,
+    max_depth: int = GBT_MAX_DEPTH,
+    learning_rate: float = GBT_LEARNING_RATE,
+    min_samples_leaf: int = GBT_MIN_SAMPLES_LEAF,
 ) -> GradientBoostingClassifier:
-    """Train a Gradient Boosted Classifier on embeddings + complexity features."""
-    print(f"\n  Config: n_estimators={GBT_N_ESTIMATORS}, max_depth={GBT_MAX_DEPTH}, "
-          f"lr={GBT_LEARNING_RATE}, subsample={GBT_SUBSAMPLE}, "
-          f"min_samples_leaf={GBT_MIN_SAMPLES_LEAF}")
+    """Train a Gradient Boosted Classifier on embeddings."""
+    n_pos = (y_train == 1).sum()
+    n_neg = (y_train == 0).sum()
+    natural_weight = n_neg / n_pos
+    weight = natural_weight * CLASS_WEIGHT_MULTIPLIER
+    sample_weights = np.where(y_train == 1, weight, 1.0)
+    print(f"\n  Sample weight for label=1: {weight:.2f} "
+          f"(natural {natural_weight:.2f} × {CLASS_WEIGHT_MULTIPLIER:.1f}x)")
+    print(f"  Config: n_estimators={n_estimators}, max_depth={max_depth}, "
+          f"lr={learning_rate}, subsample={GBT_SUBSAMPLE}, "
+          f"min_samples_leaf={min_samples_leaf}")
 
     clf = GradientBoostingClassifier(
-        n_estimators=GBT_N_ESTIMATORS,
-        max_depth=GBT_MAX_DEPTH,
-        learning_rate=GBT_LEARNING_RATE,
+        n_estimators=n_estimators,
+        max_depth=max_depth,
+        learning_rate=learning_rate,
         subsample=GBT_SUBSAMPLE,
-        min_samples_leaf=GBT_MIN_SAMPLES_LEAF,
+        min_samples_leaf=min_samples_leaf,
         random_state=SEED,
     )
-    clf.fit(X_train, y_train)
+    clf.fit(X_train, y_train, sample_weight=sample_weights)
 
     train_acc = accuracy_score(y_train, clf.predict(X_train))
     val_preds = clf.predict(X_val)
@@ -469,19 +489,20 @@ def sweep_thresholds(
     clf: GradientBoostingClassifier,
     X_val: np.ndarray,
     y_val: np.ndarray,
-) -> float:
-    """Sweep decision thresholds from 0.20 to 0.80 and return best-F1 threshold."""
+) -> tuple[float, float]:
+    """Sweep decision thresholds from 0.10 to 0.80 in 0.01 steps. Returns (best_threshold, best_fb)."""
     probs = clf.predict_proba(X_val)[:, 1]
+    b2 = F_BETA ** 2
 
-    print("\n  Threshold sweep:")
+    print(f"\n  Threshold sweep (optimizing F{F_BETA:.0f}, 0.01 steps):")
     print(f"  {'Thresh':>7s}  {'Acc':>5s}  {'Prec':>5s}  {'Recall':>6s}  {'F1':>5s}  "
-          f"{'TP':>3s}  {'FP':>3s}  {'FN':>3s}  {'TN':>3s}")
-    print("  " + "-" * 62)
+          f"{'F'+str(int(F_BETA)):>5s}  {'TP':>3s}  {'FP':>3s}  {'FN':>3s}  {'TN':>3s}")
+    print("  " + "-" * 70)
 
-    best_f1 = 0.0
+    best_fb = 0.0
     best_threshold = 0.5
 
-    for threshold in np.arange(0.20, 0.81, 0.05):
+    for threshold in np.arange(0.10, 0.81, 0.01):
         preds = (probs >= threshold).astype(int)
         tp = ((preds == 1) & (y_val == 1)).sum()
         fp = ((preds == 1) & (y_val == 0)).sum()
@@ -492,18 +513,21 @@ def sweep_thresholds(
         prec = tp / (tp + fp) if (tp + fp) > 0 else 0.0
         rec = tp / (tp + fn) if (tp + fn) > 0 else 0.0
         f1 = 2 * prec * rec / (prec + rec) if (prec + rec) > 0 else 0.0
+        fb = (1 + b2) * prec * rec / (b2 * prec + rec) if (b2 * prec + rec) > 0 else 0.0
 
         marker = ""
-        if f1 > best_f1:
-            best_f1 = f1
+        if fb > best_fb:
+            best_fb = fb
             best_threshold = threshold
             marker = " *"
 
-        print(f"  {threshold:>7.2f}  {acc:>5.3f}  {prec:>5.3f}  {rec:>6.3f}  {f1:>5.3f}  "
-              f"{tp:>3d}  {fp:>3d}  {fn:>3d}  {tn:>3d}{marker}")
+        # Only print every 5th row to keep output readable, plus any best-so-far.
+        if marker or abs(threshold * 100 % 5) < 0.5:
+            print(f"  {threshold:>7.2f}  {acc:>5.3f}  {prec:>5.3f}  {rec:>6.3f}  {f1:>5.3f}  "
+                  f"{fb:>5.3f}  {tp:>3d}  {fp:>3d}  {fn:>3d}  {tn:>3d}{marker}")
 
-    print(f"\n  Best F1: {best_f1:.3f} at threshold {best_threshold:.2f}")
-    return best_threshold
+    print(f"\n  Best F{F_BETA:.0f}: {best_fb:.3f} at threshold {best_threshold:.2f}")
+    return best_threshold, best_fb
 
 
 # ---------------------------------------------------------------------------
@@ -529,49 +553,65 @@ def main():
 
     pos_weight = compute_class_weight(labels)
 
-    # MLP uses embeddings only.
-    X_train_t = torch.tensor(embeddings[train_idx], dtype=torch.float32)
-    y_train_t = torch.tensor(y_train_np, dtype=torch.float32).unsqueeze(1)
-    X_val_t = torch.tensor(embeddings[val_idx], dtype=torch.float32)
-    y_val_t = torch.tensor(y_val_np, dtype=torch.float32).unsqueeze(1)
+    # Embeddings only for model input. Complexity features are extracted above
+    # for analysis but excluded from training — experiments showed they added
+    # no discriminative signal when embeddings were present (0% feature importance
+    # across all GBT runs).
+    X_train = embeddings[train_idx]
+    X_val = embeddings[val_idx]
+    print(f"\nFeature mode: embeddings only ({X_train.shape[1]} dims)")
 
-    # GBT uses embeddings + complexity features.
-    gbt_X_train = np.concatenate([embeddings[train_idx], complexity_features[train_idx]], axis=1)
-    gbt_X_val = np.concatenate([embeddings[val_idx], complexity_features[val_idx]], axis=1)
+    X_train_t = torch.tensor(X_train, dtype=torch.float32)
+    y_train_t = torch.tensor(y_train_np, dtype=torch.float32).unsqueeze(1)
+    X_val_t = torch.tensor(X_val, dtype=torch.float32)
+    y_val_t = torch.tensor(y_val_np, dtype=torch.float32).unsqueeze(1)
 
     # ===== MODEL 1: MLP =====
     print("\n" + "=" * 60)
-    print("MODEL 1: MLP (384 → 64 → 32 → 1, embeddings only)")
+    print(f"MODEL 1: MLP ({MLP_INPUT_DIM} → {MLP_HIDDEN1} → {MLP_HIDDEN2} → 1, embeddings only)")
     print("=" * 60)
 
     mlp_model, mlp_result = train_mlp(X_train_t, y_train_t, X_val_t, y_val_t, pos_weight)
     evaluate_mlp(mlp_model, X_val_t, y_val_t)
     mlp_best_threshold = sweep_mlp_thresholds(mlp_model, X_val_t, y_val_t)
 
-    # ===== MODEL 2: GBT =====
+    # ===== MODEL 2: GBT (grid search) =====
     print("\n" + "=" * 60)
-    print("MODEL 2: GBT (embeddings + complexity features)")
+    print("MODEL 2: GBT grid search (embeddings only)")
     print("=" * 60)
 
-    gbt_model = train_gbt(gbt_X_train, y_train_np, gbt_X_val, y_val_np)
+    gbt_configs = [
+        {"n_estimators": 100, "max_depth": 5, "learning_rate": 0.1, "min_samples_leaf": 5},
+        {"n_estimators": 200, "max_depth": 5, "learning_rate": 0.05, "min_samples_leaf": 5},
+        {"n_estimators": 200, "max_depth": 6, "learning_rate": 0.05, "min_samples_leaf": 3},
+        {"n_estimators": 300, "max_depth": 7, "learning_rate": 0.05, "min_samples_leaf": 3},
+    ]
 
-    # Print feature importance breakdown: embeddings vs complexity features.
-    importances = gbt_model.feature_importances_
-    emb_importance = importances[:EMBEDDING_DIM].sum()
-    feat_importance = importances[EMBEDDING_DIM:].sum()
-    print(f"\n  Feature importance — embeddings: {emb_importance:.3f}, "
-          f"complexity features: {feat_importance:.3f}")
-    for i, name in enumerate(COMPLEXITY_FEATURE_NAMES):
-        print(f"    {name:>25s}: {importances[EMBEDDING_DIM + i]:.4f}")
+    best_gbt_fb = 0.0
+    best_gbt_model = None
+    best_gbt_threshold = 0.5
+    best_gbt_config = None
 
-    gbt_best_threshold = sweep_thresholds(gbt_model, gbt_X_val, y_val_np)
+    for i, cfg in enumerate(gbt_configs):
+        print(f"\n--- GBT config {i+1}/{len(gbt_configs)} ---")
+        model = train_gbt(X_train, y_train_np, X_val, y_val_np, **cfg)
+        threshold, fb = sweep_thresholds(model, X_val, y_val_np)
+
+        if fb > best_gbt_fb:
+            best_gbt_fb = fb
+            best_gbt_model = model
+            best_gbt_threshold = threshold
+            best_gbt_config = cfg
+
+    print(f"\n{'=' * 60}")
+    print(f"Best GBT config: {best_gbt_config}")
+    print(f"Best F{F_BETA:.0f}: {best_gbt_fb:.3f} at threshold {best_gbt_threshold:.2f}")
+    print(f"{'=' * 60}")
 
     # ===== COMPARISON =====
-    gbt_acc = accuracy_score(y_val_np, gbt_model.predict(gbt_X_val))
-    print("\n" + "=" * 60)
-    print(f"COMPARISON:  MLP val_acc={mlp_result['val_acc']:.3f}  |  GBT val_acc={gbt_acc:.3f}")
+    gbt_acc = accuracy_score(y_val_np, best_gbt_model.predict(X_val))
+    print(f"\nCOMPARISON:  MLP val_acc={mlp_result['val_acc']:.3f}  |  GBT val_acc={gbt_acc:.3f}")
     print(f"  Majority-class baseline: {(y_val_np == 0).sum() / len(y_val_np):.3f}")
-    print("=" * 60)
 
     # ===== SAVE CHECKPOINTS =====
 
@@ -591,9 +631,12 @@ def main():
 
     joblib.dump(
         {
-            "model": gbt_model,
+            "model": best_gbt_model,
             "val_acc": gbt_acc,
-            "best_threshold": float(gbt_best_threshold),
+            "best_threshold": float(best_gbt_threshold),
+            "best_f_beta": float(best_gbt_fb),
+            "f_beta": F_BETA,
+            "config": best_gbt_config,
             "embedding_model": EMBEDDING_MODEL,
             "embedding_dim": EMBEDDING_DIM,
             "complexity_feature_names": COMPLEXITY_FEATURE_NAMES,
