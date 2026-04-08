@@ -521,3 +521,22 @@ When a request arrives with `"model": "auto"`, the handler calls `Router.Route(e
 - API surface docs in obsidian vault (`llmrouter.md`) still show the old body-field approach for `x-cache`/`x-route` — should be updated in a future pass
 - 11 new unit tests for router covering all strategies, defaults fallback, provider override, and error cases
 
+
+## 2026-04-08 - PR #25: Improve classifier training with class weighting and F2 optimization
+
+**Change Summary:**
+Iterated on the GBT complexity classifier training pipeline to address the 4:1 class imbalance that caused both models to always predict the majority class (adequate). Added class weighting, switched to F2-optimized threshold selection, added hyperparameter grid search, and dropped handcrafted complexity features after experiments proved they added no signal.
+
+**How It Works:**
+- **Class weighting:** `CLASS_WEIGHT_MULTIPLIER` (4.0x) scales `sample_weight` on label=1 examples during GBT training via `clf.fit(sample_weight=...)`, and scales MLP `pos_weight` in `BCEWithLogitsLoss`. This penalizes false negatives (missed expensive prompts) much harder than false positives.
+- **F2 threshold sweep:** Both MLP and GBT threshold sweeps now optimize F-beta with beta=2 (recall weighted 2x over precision) instead of F1. GBT sweep uses 0.01 step increments (was 0.05) across 0.10–0.80 for finer operating point selection.
+- **Grid search:** `train_gbt()` now accepts hyperparameters as kwargs. `main()` loops over 4 configs (varying n_estimators, max_depth, learning_rate, min_samples_leaf) and selects the best by F2 score.
+- **Embeddings only:** Complexity features (subtask_count, constraint_count, etc.) are still extracted and printed for analysis, but excluded from model input. Experiments showed 0% GBT feature importance when embeddings were present, and 25% val accuracy when used alone — confirmed redundant.
+- **Best model:** GBT with 100 trees, depth 5, lr 0.1, threshold 0.28 → 91.3% recall on needs-expensive prompts, 25% precision. Conservative router that rarely serves bad responses but over-routes ~72% of adequate prompts to expensive.
+
+**Additional Notes:**
+- Covers Week 5 classifier training iteration. MLP code is retained as a baseline comparison artifact but never learned on this data (collapsed to majority-class prediction across all configurations).
+- The GBT checkpoint (`complexity_classifier_gbt.joblib`) now includes `best_f_beta`, `f_beta`, and `config` metadata alongside the model.
+- Handcrafted complexity feature extraction code is preserved in the script for documentation — the features are a good interview talking point as a measured negative result.
+- Next: export GBT to ONNX via `skl2onnx`, then implement `classifier.go` for Go-side inference (Week 6).
+
