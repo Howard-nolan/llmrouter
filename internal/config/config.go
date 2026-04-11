@@ -22,6 +22,14 @@ type Config struct {
 	Cache     cache.CacheConfig         `koanf:"cache"`
 	Embedding EmbeddingConfig           `koanf:"embedding"`
 	Routing   RoutingConfig             `koanf:"routing"`
+	Costs     map[string]ModelCost      `koanf:"costs"`
+}
+
+// ModelCost holds per-model token pricing. Prices are in USD per million
+// tokens. The handler uses these to compute request cost from token usage.
+type ModelCost struct {
+	InputPerMillion  float64 `koanf:"input_per_million"`
+	OutputPerMillion float64 `koanf:"output_per_million"`
 }
 
 // RoutingConfig controls how "model": "auto" requests are routed.

@@ -69,10 +69,11 @@ type Message struct {
 // response format into this struct, and the handler serializes it as
 // OpenAI-format JSON back to the client.
 type ChatResponse struct {
-	ID      string // unique response ID from the provider
-	Model   string // the model that actually generated the response
-	Content string // the generated text
-	Usage   Usage  // token counts for cost tracking and metrics
+	ID      string  `json:"id"`                // unique response ID from the provider
+	Model   string  `json:"model"`             // the model that actually generated the response
+	Content string  `json:"content"`           // the generated text
+	Usage   Usage   `json:"usage"`             // token counts for cost tracking and metrics
+	CostUSD float64 `json:"cost_usd,omitempty"` // request cost in USD, computed by the handler
 }
 
 // Usage holds token count information. Every provider returns this in some
