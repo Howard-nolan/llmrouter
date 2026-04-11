@@ -540,3 +540,25 @@ Iterated on the GBT complexity classifier training pipeline to address the 4:1 c
 - Handcrafted complexity feature extraction code is preserved in the script for documentation — the features are a good interview talking point as a measured negative result.
 - Next: export GBT to ONNX via `skl2onnx`, then implement `classifier.go` for Go-side inference (Week 6).
 
+
+## 2026-04-11 - PR #26: Add classifier ONNX integration and per-request cost tracking
+
+**Change Summary:**
+- Export trained GBT complexity classifier to ONNX via `skl2onnx` (`training/export_onnx.py`), with numerical verification against scikit-learn output
+- Implement `ONNXClassifier` wrapper in Go (`internal/router/classifier.go`) satisfying the `router.Classifier` interface — `"model": "auto"` now runs real complexity classification instead of erroring
+- Add per-model token pricing config and `cost_usd` field in both streaming (final SSE chunk) and non-streaming (JSON body) responses
+
+**How It Works:**
+**ONNX Export:** `export_onnx.py` loads the GBT joblib checkpoint, converts via `skl2onnx` with `zipmap: False` (outputs plain float tensor instead of map type the Go runtime can't handle), verifies ONNX output matches sklearn `predict_proba` within 1e-5, saves to `models/complexity_classifier.onnx`.
+
+**Classifier Integration:** `ONNXClassifier` loads the ONNX model at startup (reusing the ONNX Runtime environment already initialized by the embedder — one per process). `Classify(embedding []float32) (float64, error)` feeds a `[1, 384]` tensor in, reads `probabilities[0][1]` (P(needs-expensive)) as the complexity score. `main.go` creates the classifier and passes it to `router.New()` instead of `nil`. Threshold updated from 0.6 to 0.28 to match the GBT's optimal F2 operating point.
+
+**Cost Tracking:** `config.ModelCost` struct holds input/output price per million tokens. `computeCost()` in the handler does `(promptTokens × inputPrice + completionTokens × outputPrice) / 1M`. For non-streaming: set directly on `ChatResponse.CostUSD`. For streaming: `stream.Write` accepts a `costFn func(Usage) float64` closure — called on the final chunk when usage becomes available, included in the SSE JSON alongside usage data. Cost appears in the response body in both modes for client consistency.
+
+**Additional Notes:**
+- Covers remaining Week 6 tasks: ONNX export, classifier.go, wiring, cost tracking
+- `ChatResponse` fields now have `json:"..."` tags for proper lowercase serialization matching OpenAI format
+- The `costFn` closure pattern keeps the stream package decoupled from config — it only knows "call this function with usage to get a number"
+- GBT model is 125KB ONNX, inference ~0.1ms — negligible vs LLM response latency
+- Complexity threshold 0.28 = 91.3% recall on needs-expensive prompts (conservative — over-routes to expensive). Tuning deferred to Week 8 load testing
+
