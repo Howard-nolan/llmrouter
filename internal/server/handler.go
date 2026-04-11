@@ -9,9 +9,34 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/howard-nolan/llmrouter/internal/config"
 	"github.com/howard-nolan/llmrouter/internal/provider"
 	"github.com/howard-nolan/llmrouter/internal/stream"
 )
+
+// computeCost calculates the USD cost of a request from token usage and the
+// per-model cost table. Returns 0 if the model isn't in the table.
+func computeCost(model string, usage provider.Usage, costs map[string]config.ModelCost) float64 {
+	mc, ok := costs[model]
+	if !ok {
+		return 0
+	}
+	return (float64(usage.PromptTokens)*mc.InputPerMillion +
+		float64(usage.CompletionTokens)*mc.OutputPerMillion) / 1_000_000
+}
+
+// costFnForModel returns a closure that computes cost from usage for a
+// specific model. Passed into stream.Write so cost can be computed when
+// usage becomes available on the final chunk. Returns nil if the model
+// isn't in the cost table (stream.Write skips cost when nil).
+func costFnForModel(model string, costs map[string]config.ModelCost) func(provider.Usage) float64 {
+	if _, ok := costs[model]; !ok {
+		return nil
+	}
+	return func(usage provider.Usage) float64 {
+		return computeCost(model, usage, costs)
+	}
+}
 
 // writeProviderError writes a JSON error response with an HTTP status code
 // derived from the error type. Maps ProviderError status codes to appropriate
@@ -309,7 +334,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 				// Replay as a fast SSE burst — stream.Write doesn't
 				// know (or care) that these chunks came from cache.
 				chunks := replayChunks(result.Response)
-				if err := stream.Write(w, chunks); err != nil {
+				if err := stream.Write(w, chunks, costFnForModel(result.Response.Model, s.cfg.Costs)); err != nil {
 					log.Printf("stream write error: %v", err)
 				}
 				return
@@ -397,7 +422,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			chunks = s.teeAndCache(chunks, embedding, req.Model, r.Context())
 		}
 
-		if err := stream.Write(w, chunks); err != nil {
+		if err := stream.Write(w, chunks, costFnForModel(req.Model, s.cfg.Costs)); err != nil {
 			log.Printf("stream write error: %v", err)
 		}
 		return
@@ -414,6 +439,9 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeProviderError(w, err)
 		return
 	}
+
+	// Compute cost from token usage before caching/responding.
+	resp.CostUSD = computeCost(req.Model, resp.Usage, s.cfg.Costs)
 
 	// Store the response in cache for future hits.
 	if cacheEnabled {

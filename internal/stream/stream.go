@@ -38,6 +38,11 @@ type sseChunk struct {
 	// the "usage" key in the JSON at all. This matches OpenAI's behavior
 	// where usage only appears on the last event.
 	Usage *sseUsage `json:"usage,omitempty"`
+
+	// CostUSD is the computed request cost in USD, included on the final
+	// chunk alongside usage. Pointer + omitempty so it's absent on
+	// non-final chunks.
+	CostUSD *float64 `json:"cost_usd,omitempty"`
 }
 
 // sseChoice represents one choice in the streaming response.
@@ -83,7 +88,12 @@ type sseUsage struct {
 // It sets the SSE headers, then loops over the channel, formatting each
 // chunk as a "data: {json}\n\n" line and flushing it immediately so the
 // client sees tokens arrive in real-time.
-func Write(w http.ResponseWriter, chunks <-chan provider.StreamChunk) error {
+//
+// costFn is called with the final chunk's usage to compute request cost.
+// Pass nil to omit cost from the response (e.g. when the model isn't in
+// the cost table). The handler creates a closure that captures the cost
+// table and model name, keeping the stream package decoupled from config.
+func Write(w http.ResponseWriter, chunks <-chan provider.StreamChunk, costFn func(provider.Usage) float64) error {
 	// --- Step 1: Assert that the ResponseWriter supports flushing ---
 	//
 	// http.ResponseWriter is an interface with three methods: Header(),
@@ -191,6 +201,10 @@ func Write(w http.ResponseWriter, chunks <-chan provider.StreamChunk) error {
 					PromptTokens:     chunk.Usage.PromptTokens,
 					CompletionTokens: chunk.Usage.CompletionTokens,
 					TotalTokens:      chunk.Usage.TotalTokens,
+				}
+				if costFn != nil {
+					cost := costFn(*chunk.Usage)
+					event.CostUSD = &cost
 				}
 			}
 		}

@@ -94,10 +94,22 @@ func main() {
 	}
 	defer c.Close()
 
-	// Create the model router for "auto" routing. No classifier yet —
-	// cheapest and quality strategies work, auto will error until the
-	// ONNX classifier is integrated.
-	mr := router.New(cfg.Routing, nil)
+	// Create the complexity classifier from the ONNX model exported by
+	// training/export_onnx.py. This must happen after embedder.New()
+	// because the embedder initializes the ONNX Runtime environment
+	// (one per process), and the classifier reuses it.
+	classifier, err := router.NewONNXClassifier(
+		cfg.Routing.ClassifierModelPath,
+		cfg.Embedding.Dimension,
+	)
+	if err != nil {
+		log.Fatalf("failed to create classifier: %v", err)
+	}
+	defer classifier.Close()
+
+	// Create the model router for "auto" routing. With the classifier
+	// plugged in, all three strategies work: auto, cheapest, quality.
+	mr := router.New(cfg.Routing, classifier)
 
 	srv := server.New(cfg, models, emb, c, mr)
 
