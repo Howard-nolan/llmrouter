@@ -6,9 +6,35 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 
+	"github.com/howard-nolan/llmrouter/internal/metrics"
 	"github.com/howard-nolan/llmrouter/internal/provider"
 )
+
+// WriteOptions configures the SSE writer: labels, timing origin, cost
+// computation, and a done-callback for the handler to record counter metrics
+// without this package depending on application-level state.
+type WriteOptions struct {
+	// Provider and Model label TTFT and InterTokenLatency observations.
+	// Empty strings disable the timing observations entirely.
+	Provider string
+	Model    string
+
+	// RequestStart is the handler-entry timestamp used as the TTFT origin.
+	// Zero value disables TTFT observation.
+	RequestStart time.Time
+
+	// CostFn computes USD cost from the final chunk's usage. Nil omits
+	// cost from the response body.
+	CostFn func(provider.Usage) float64
+
+	// OnDone is called after the final chunk is processed with the chunk's
+	// usage and the computed cost (or 0 if CostFn was nil). Lets the handler
+	// record Tokens/CostUSD/etc. without stream importing the metrics package
+	// for counter observations. Nil is a no-op — used on cache-hit replays.
+	OnDone func(usage provider.Usage, costUSD float64)
+}
 
 // ---------------------------------------------------------------------------
 // OpenAI-compatible SSE response types
@@ -93,7 +119,12 @@ type sseUsage struct {
 // Pass nil to omit cost from the response (e.g. when the model isn't in
 // the cost table). The handler creates a closure that captures the cost
 // table and model name, keeping the stream package decoupled from config.
-func Write(w http.ResponseWriter, chunks <-chan provider.StreamChunk, costFn func(provider.Usage) float64) error {
+func Write(w http.ResponseWriter, chunks <-chan provider.StreamChunk, opts WriteOptions) error {
+	costFn := opts.CostFn
+	recordTTFT := !opts.RequestStart.IsZero() && opts.Provider != "" && opts.Model != ""
+	recordInter := opts.Provider != "" && opts.Model != ""
+	firstChunkSeen := false
+	var lastChunkTime time.Time
 	// --- Step 1: Assert that the ResponseWriter supports flushing ---
 	//
 	// http.ResponseWriter is an interface with three methods: Header(),
@@ -150,6 +181,17 @@ func Write(w http.ResponseWriter, chunks <-chan provider.StreamChunk, costFn fun
 	// This is the consumer end of the kitchen/waiter pattern from
 	// google.go — we're the waiter picking dishes off the serving window.
 	for chunk := range chunks {
+		now := time.Now()
+		if !firstChunkSeen {
+			firstChunkSeen = true
+			if recordTTFT {
+				metrics.TimeToFirstToken.WithLabelValues(opts.Provider, opts.Model).Observe(now.Sub(opts.RequestStart).Seconds())
+			}
+		} else if recordInter {
+			metrics.InterTokenLatency.WithLabelValues(opts.Provider, opts.Model).Observe(now.Sub(lastChunkTime).Seconds())
+		}
+		lastChunkTime = now
+
 		// Check for mid-stream errors from the provider goroutine.
 		if chunk.Error != nil {
 			log.Printf("stream error: %v", chunk.Error)
@@ -202,9 +244,13 @@ func Write(w http.ResponseWriter, chunks <-chan provider.StreamChunk, costFn fun
 					CompletionTokens: chunk.Usage.CompletionTokens,
 					TotalTokens:      chunk.Usage.TotalTokens,
 				}
+				var cost float64
 				if costFn != nil {
-					cost := costFn(*chunk.Usage)
+					cost = costFn(*chunk.Usage)
 					event.CostUSD = &cost
+				}
+				if opts.OnDone != nil {
+					opts.OnDone(*chunk.Usage, cost)
 				}
 			}
 		}

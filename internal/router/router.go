@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/howard-nolan/llmrouter/internal/config"
+	"github.com/howard-nolan/llmrouter/internal/metrics"
 )
 
 // Classifier scores prompt complexity from an embedding vector. Returns a
@@ -56,12 +57,13 @@ func (rt *Router) Route(embedding []float32, strategy string, providerName strin
 		return "", fmt.Errorf("no routing config for provider %q", providerName)
 	}
 
+	var selected string
 	switch strategy {
 	case "cheapest":
-		return providerCfg.CheapModel, nil
+		selected = providerCfg.CheapModel
 
 	case "quality":
-		return providerCfg.QualityModel, nil
+		selected = providerCfg.QualityModel
 
 	case "auto":
 		if rt.classifier == nil {
@@ -74,11 +76,30 @@ func (rt *Router) Route(embedding []float32, strategy string, providerName strin
 		}
 
 		if score < rt.cfg.ComplexityThreshold {
-			return providerCfg.CheapModel, nil
+			selected = providerCfg.CheapModel
+		} else {
+			selected = providerCfg.QualityModel
 		}
-		return providerCfg.QualityModel, nil
 
 	default:
 		return "", fmt.Errorf("unknown routing strategy: %q", strategy)
 	}
+
+	metrics.RoutingDecisions.WithLabelValues(strategy, selected).Inc()
+	return selected, nil
+}
+
+// CheapAndQualityFor returns the configured cheap and quality model names for
+// the given provider. Used by the handler to compute routing-cost-savings when
+// auto routing selects the cheap model. Returns ok=false if the provider isn't
+// in the routing config.
+func (rt *Router) CheapAndQualityFor(providerName string) (cheap, quality string, ok bool) {
+	if providerName == "" {
+		providerName = rt.cfg.DefaultProvider
+	}
+	cfg, ok := rt.cfg.Providers[providerName]
+	if !ok {
+		return "", "", false
+	}
+	return cfg.CheapModel, cfg.QualityModel, true
 }

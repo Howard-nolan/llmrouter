@@ -49,7 +49,7 @@ func TestWrite_MultipleChunks(t *testing.T) {
 	)
 
 	w := httptest.NewRecorder()
-	err := Write(w, ch, nil)
+	err := Write(w, ch, WriteOptions{})
 	if err != nil {
 		t.Fatalf("Write returned error: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestWrite_FinalChunkWithContent(t *testing.T) {
 	)
 
 	w := httptest.NewRecorder()
-	err := Write(w, ch, nil)
+	err := Write(w, ch, WriteOptions{})
 	if err != nil {
 		t.Fatalf("Write returned error: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestWrite_MidStreamError(t *testing.T) {
 	)
 
 	w := httptest.NewRecorder()
-	err := Write(w, ch, nil)
+	err := Write(w, ch, WriteOptions{})
 
 	// Should return the error.
 	if err == nil {
@@ -198,7 +198,7 @@ func TestWrite_SSEFormat(t *testing.T) {
 	)
 
 	w := httptest.NewRecorder()
-	if err := Write(w, ch, nil); err != nil {
+	if err := Write(w, ch, WriteOptions{}); err != nil {
 		t.Fatalf("Write returned error: %v", err)
 	}
 
