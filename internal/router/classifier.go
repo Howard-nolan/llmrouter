@@ -2,7 +2,9 @@ package router
 
 import (
 	"fmt"
+	"time"
 
+	"github.com/howard-nolan/llmrouter/internal/metrics"
 	ort "github.com/yalue/onnxruntime_go"
 )
 
@@ -48,6 +50,11 @@ func NewONNXClassifier(modelPath string, inputDim int) (*ONNXClassifier, error) 
 // for the given embedding vector. The router compares this score against
 // its configured threshold to decide cheap vs. quality model.
 func (c *ONNXClassifier) Classify(embedding []float32) (float64, error) {
+	start := time.Now()
+	defer func() {
+		metrics.ClassificationDuration.Observe(time.Since(start).Seconds())
+	}()
+
 	if len(embedding) != c.inputDim {
 		return 0, fmt.Errorf(
 			"classifier: expected embedding of dimension %d, got %d",
@@ -85,6 +92,7 @@ func (c *ONNXClassifier) Classify(embedding []float32) (float64, error) {
 	// Read the probability of class 1 (needs-expensive) as the complexity score.
 	probs := outputTensor.GetData()
 	score := float64(probs[1])
+	metrics.ComplexityScore.Observe(score)
 	return score, nil
 }
 

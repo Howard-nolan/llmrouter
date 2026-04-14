@@ -8,11 +8,60 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/howard-nolan/llmrouter/internal/config"
+	"github.com/howard-nolan/llmrouter/internal/metrics"
 	"github.com/howard-nolan/llmrouter/internal/provider"
 	"github.com/howard-nolan/llmrouter/internal/stream"
 )
+
+// classifyProviderError maps an error from a provider call into the capped
+// error_type enum used on metrics.ProviderErrors. Keeps label cardinality bounded.
+func classifyProviderError(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return metrics.ErrTimeout
+	}
+	var pe *provider.ProviderError
+	if errors.As(err, &pe) {
+		switch {
+		case pe.StatusCode == http.StatusTooManyRequests:
+			return metrics.ErrRateLimit
+		case pe.StatusCode == http.StatusUnauthorized, pe.StatusCode == http.StatusForbidden:
+			return metrics.ErrAuth
+		case pe.StatusCode >= 500:
+			return metrics.ErrUpstream5xx
+		}
+	}
+	return metrics.ErrOther
+}
+
+// observeRoutingSavings records metrics.CostSavedByRouting when the chosen
+// model is the provider's cheap model. The savings estimator approximates the
+// quality model's cost using this request's actual token counts: input tokens
+// are exact (same prompt either way), output tokens approximated using the
+// cheap model's completion count. No-op if the router isn't configured, the
+// chosen model isn't the cheap model, or cost table entries are missing.
+func (s *Server) observeRoutingSavings(providerName, xProvider, chosenModel string, usage provider.Usage, actualCost float64) {
+	if s.modelRouter == nil {
+		return
+	}
+	cheap, quality, ok := s.modelRouter.CheapAndQualityFor(xProvider)
+	if !ok || chosenModel != cheap {
+		return
+	}
+	qc, ok := s.cfg.Costs[quality]
+	if !ok {
+		return
+	}
+	qualityEstimate := (float64(usage.PromptTokens)*qc.InputPerMillion +
+		float64(usage.CompletionTokens)*qc.OutputPerMillion) / 1_000_000
+	savings := qualityEstimate - actualCost
+	if savings <= 0 {
+		return
+	}
+	metrics.CostSavedByRouting.WithLabelValues(providerName).Add(savings)
+}
 
 // computeCost calculates the USD cost of a request from token usage and the
 // per-model cost table. Returns 0 if the model isn't in the table.
@@ -269,6 +318,24 @@ func (s *Server) handleCacheFlush(w http.ResponseWriter, r *http.Request) {
 // It decodes the request, resolves the provider from the model name,
 // and dispatches to either the streaming or non-streaming path.
 func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+
+	// Captured by the deferred metrics recorder. Filled in as the request
+	// progresses — provider/model are known after routing, cacheStatus is
+	// updated on hit/skip/only-miss paths.
+	var (
+		metricProvider    string
+		metricModel       string
+		metricCacheStatus = metrics.CacheMiss
+	)
+	defer func() {
+		if metricProvider == "" {
+			return // early failure before a provider was chosen — skip
+		}
+		metrics.Requests.WithLabelValues(metricProvider, metricModel, metricCacheStatus).Inc()
+		metrics.RequestDuration.WithLabelValues(metricProvider, metricModel).Observe(time.Since(start).Seconds())
+	}()
+
 	// Step 1: Decode the incoming JSON body into our unified ChatRequest.
 	var req provider.ChatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -304,7 +371,9 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		embedStart := time.Now()
 		embedding, err = s.embedder.Embed(userMsg)
+		metrics.EmbeddingDuration.Observe(time.Since(embedStart).Seconds())
 		if err != nil {
 			log.Printf("embedding error: %v", err)
 			// Without an embedding, caching can't work. But routing
@@ -330,11 +399,26 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("X-LLMRouter-Cache", "HIT")
 			w.Header().Set("X-LLMRouter-Similarity", fmt.Sprintf("%.4f", result.Similarity))
 
+			metricCacheStatus = metrics.CacheHit
+			metricModel = result.Response.Model
+			if p, ok := s.models[metricModel]; ok {
+				metricProvider = p.Name()
+			}
+			metrics.CacheSimilarity.WithLabelValues("hit").Observe(result.Similarity)
+			if result.Response.CostUSD > 0 && metricProvider != "" {
+				metrics.CostSavedByCache.WithLabelValues(metricProvider, metricModel).Add(result.Response.CostUSD)
+			}
+
 			if req.Stream {
 				// Replay as a fast SSE burst — stream.Write doesn't
 				// know (or care) that these chunks came from cache.
 				chunks := replayChunks(result.Response)
-				if err := stream.Write(w, chunks, costFnForModel(result.Response.Model, s.cfg.Costs)); err != nil {
+				if err := stream.Write(w, chunks, stream.WriteOptions{
+					Provider:     metricProvider,
+					Model:        metricModel,
+					RequestStart: start,
+					CostFn:       costFnForModel(result.Response.Model, s.cfg.Costs),
+				}); err != nil {
 					log.Printf("stream write error: %v", err)
 				}
 				return
@@ -350,6 +434,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// X-Cache: "only" returns 404 on a cache miss instead of calling
 	// the provider. Useful for testing cache without spending tokens.
 	if xCache == "only" {
+		metricCacheStatus = metrics.CacheOnlyMiss
 		w.Header().Set("X-LLMRouter-Cache", "MISS")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
@@ -361,6 +446,9 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	// Cache MISS (or cache disabled) — forward to the provider.
 	w.Header().Set("X-LLMRouter-Cache", "MISS")
+	if xCache == "skip" {
+		metricCacheStatus = metrics.CacheSkip
+	}
 
 	// Step 3: Route "auto" requests to a concrete model.
 	if req.Model == "auto" {
@@ -398,6 +486,8 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("X-LLMRouter-Provider", p.Name())
 	w.Header().Set("X-LLMRouter-Model", req.Model)
+	metricProvider = p.Name()
+	metricModel = req.Model
 
 	// Step 4: Branch on streaming vs non-streaming.
 	const maxRetries = 3
@@ -410,6 +500,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			return callErr
 		})
 		if err != nil {
+			metrics.ProviderErrors.WithLabelValues(p.Name(), classifyProviderError(err)).Inc()
 			writeProviderError(w, err)
 			return
 		}
@@ -422,7 +513,22 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			chunks = s.teeAndCache(chunks, embedding, req.Model, r.Context())
 		}
 
-		if err := stream.Write(w, chunks, costFnForModel(req.Model, s.cfg.Costs)); err != nil {
+		providerName := p.Name()
+		model := req.Model
+		if err := stream.Write(w, chunks, stream.WriteOptions{
+			Provider:     providerName,
+			Model:        model,
+			RequestStart: start,
+			CostFn:       costFnForModel(model, s.cfg.Costs),
+			OnDone: func(usage provider.Usage, cost float64) {
+				metrics.Tokens.WithLabelValues(providerName, model, metrics.DirInput).Add(float64(usage.PromptTokens))
+				metrics.Tokens.WithLabelValues(providerName, model, metrics.DirOutput).Add(float64(usage.CompletionTokens))
+				metrics.PromptTokens.Observe(float64(usage.PromptTokens))
+				metrics.CostUSD.WithLabelValues(providerName, model).Add(cost)
+				metrics.CostPerRequest.WithLabelValues(providerName, model).Observe(cost)
+				s.observeRoutingSavings(providerName, xProvider, model, usage, cost)
+			},
+		}); err != nil {
 			log.Printf("stream write error: %v", err)
 		}
 		return
@@ -442,6 +548,13 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	// Compute cost from token usage before caching/responding.
 	resp.CostUSD = computeCost(req.Model, resp.Usage, s.cfg.Costs)
+
+	metrics.Tokens.WithLabelValues(p.Name(), req.Model, metrics.DirInput).Add(float64(resp.Usage.PromptTokens))
+	metrics.Tokens.WithLabelValues(p.Name(), req.Model, metrics.DirOutput).Add(float64(resp.Usage.CompletionTokens))
+	metrics.PromptTokens.Observe(float64(resp.Usage.PromptTokens))
+	metrics.CostUSD.WithLabelValues(p.Name(), req.Model).Add(resp.CostUSD)
+	metrics.CostPerRequest.WithLabelValues(p.Name(), req.Model).Observe(resp.CostUSD)
+	s.observeRoutingSavings(p.Name(), xProvider, req.Model, resp.Usage, resp.CostUSD)
 
 	// Store the response in cache for future hits.
 	if cacheEnabled {

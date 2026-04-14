@@ -10,6 +10,7 @@ import (
 	"github.com/howard-nolan/llmrouter/internal/cache"
 	"github.com/howard-nolan/llmrouter/internal/config"
 	"github.com/howard-nolan/llmrouter/internal/embedder"
+	"github.com/howard-nolan/llmrouter/internal/metrics"
 	"github.com/howard-nolan/llmrouter/internal/provider"
 	"github.com/howard-nolan/llmrouter/internal/router"
 	"github.com/howard-nolan/llmrouter/internal/server"
@@ -93,6 +94,10 @@ func main() {
 		log.Fatalf("failed to create cache: %v", err)
 	}
 	defer c.Close()
+
+	metrics.RegisterCacheEntries(func() float64 {
+		return float64(c.Stats().Entries)
+	})
 
 	// Create the complexity classifier from the ONNX model exported by
 	// training/export_onnx.py. This must happen after embedder.New()

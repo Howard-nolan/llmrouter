@@ -9,6 +9,7 @@ import (
 	"github.com/howard-nolan/llmrouter/internal/cache"
 	"github.com/howard-nolan/llmrouter/internal/config"
 	"github.com/howard-nolan/llmrouter/internal/provider"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // Embedder is the interface for computing text embeddings. Defined here
@@ -24,6 +25,7 @@ type Embedder interface {
 // router package (same pattern as Embedder above).
 type ModelRouter interface {
 	Route(embedding []float32, strategy string, providerName string) (string, error)
+	CheapAndQualityFor(providerName string) (cheap, quality string, ok bool)
 }
 
 // Server holds the HTTP router and all dependencies that handlers need.
@@ -67,6 +69,7 @@ func (s *Server) routes() {
 
 	// --- Routes ---
 	r.Get("/health", s.handleHealth)
+	r.Handle("/metrics", promhttp.Handler())
 	r.Get("/cache/stats", s.handleCacheStats)
 	r.Post("/cache/flush", s.handleCacheFlush)
 	r.Post("/v1/chat/completions", s.handleChatCompletions)
