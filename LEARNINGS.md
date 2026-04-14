@@ -562,3 +562,29 @@ Iterated on the GBT complexity classifier training pipeline to address the 4:1 c
 - GBT model is 125KB ONNX, inference ~0.1ms — negligible vs LLM response latency
 - Complexity threshold 0.28 = 91.3% recall on needs-expensive prompts (conservative — over-routes to expensive). Tuning deferred to Week 8 load testing
 
+
+## 2026-04-14 - PR #27: Add Prometheus metrics + /metrics endpoint (Week 7)
+
+**Change Summary:**
+- Adds `internal/metrics` package with 17 Prometheus collectors covering request counts, latency (end-to-end, TTFT, inter-token), token usage, cost, cache behavior, routing decisions, and provider errors.
+- Adds counterfactual cost-savings counters (`cost_saved_by_cache_usd_total`, `cost_saved_by_routing_usd_total`) so the final writeup can quantify $ saved vs. a naive baseline.
+- Exposes `/metrics` via `promhttp.Handler()` and instruments handler, streaming writer, complexity classifier, and router.
+
+**How It Works:**
+Collectors are declared as package-level vars and auto-registered via `promauto`. Most call sites live in the request handler, which captures `(provider, model, cache_status)` locals as the request progresses and a `defer` records `Requests` + `RequestDuration` at exit.
+
+Per-chunk timing metrics (TTFT, inter-token latency) must live inside the SSE loop, so `stream.Write`'s signature was changed to take a `WriteOptions` struct carrying `Provider`, `Model`, `RequestStart`, `CostFn`, and an optional `OnDone(usage, cost)` callback. The handler passes `OnDone` on the live provider path to record final-chunk counter metrics (tokens, cost, routing savings) without the stream package importing `metrics`.
+
+`ComplexityScore` and `ClassificationDuration` are observed inside `ONNXClassifier.Classify` since that's the only place the score exists. `RoutingDecisions` is counted inside `router.Route`. A new `CheapAndQualityFor(provider)` helper lets the handler compute routing-savings without peeking at router config.
+
+The cache-entries gauge uses `promauto.NewGaugeFunc` with a closure over `cache.Stats()` — no polling, always live at scrape time, and keeps the `metrics` package free of a `cache` import (right dependency direction for a leaf package).
+
+Provider errors are mapped to a capped `error_type` enum (`timeout | rate_limit | auth | upstream_5xx | other`) via a small classifier to keep label cardinality bounded.
+
+**Additional Notes:**
+- Covers most of Week 7's Go tasks. Still open for Week 7: Prometheus scrape config in `docker-compose.yaml` and Grafana dashboard JSON (pure ops work, no Go).
+- Cache-hit replays record TTFT (legitimately fast latency) but skip counter observations since those are already handled on the cache-hit branch (`CostSavedByCache`, etc.).
+- `CacheSimilarity` is currently only observed on hits. Observing near-miss scores would require changing `Cache.Lookup` to return the best score even below threshold; deferred as a small follow-up useful for threshold tuning.
+- Streaming-path routing-savings observation goes through the `OnDone` callback, so it only fires when the final chunk carries a `Usage` value.
+- The `model="auto"` label value doesn't appear on metrics — by the time we record, `req.Model` has been rewritten to the concrete routed model. `RoutingDecisions{strategy, selected_model}` captures the auto-routing behavior separately.
+
