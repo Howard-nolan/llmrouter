@@ -588,3 +588,43 @@ Provider errors are mapped to a capped `error_type` enum (`timeout | rate_limit 
 - Streaming-path routing-savings observation goes through the `OnDone` callback, so it only fires when the final chunk carries a `Usage` value.
 - The `model="auto"` label value doesn't appear on metrics — by the time we record, `req.Model` has been rewritten to the concrete routed model. `RoutingDecisions{strategy, selected_model}` captures the auto-routing behavior separately.
 
+
+## 2026-04-16 - PR #28: Add Grafana dashboard and fix auto-routing cache lookup
+
+**Change Summary:**
+- Wires up the Grafana side of Week 7: provisioned datasource + 13-panel dashboard mounted into the Grafana container, so `docker-compose up` shows live metrics with zero clicks.
+- Fixes a real bug: requests with `model: "auto"` were structurally unable to hit the cache, because cache lookup happened before the routing block rewrote `req.Model` — lookup scanned the empty `cache:index:auto` partition while stores landed under the resolved model's partition.
+- Tunes histogram buckets: tightens `cache_similarity_score` to the threshold-and-above range (we only observe hits), widens `request_duration_seconds` and `time_to_first_token_seconds` so `histogram_quantile` doesn't push high percentiles to bucket upper bounds.
+
+**How It Works:**
+**Grafana provisioning.** Three new files:
+- `grafana/provisioning/datasources/prometheus.yml` — datasource UID `prometheus`, points at `http://prometheus:9090` via the docker-compose service network.
+- `grafana/provisioning/dashboards/dashboards.yml` — provider config with `updateIntervalSeconds: 10` so JSON edits hot-reload, and `allowUiUpdates: true` so UI tweaks can be exported back to the file.
+- `grafana/dashboards/llmrouter.json` — 13 panels organized as Traffic → Latency → Cost → Cache → Routing rows. Latency panels split by provider (`sum by (le, provider)`) for p50/p95/p99 readouts on `request_duration_seconds` and `time_to_first_token_seconds`. Cost row pairs three cumulative stat panels (total spend, saved by cache, saved by routing) with a stacked rate time series. Cache row has hit-rate stat with thresholds, entry-count stat, and a similarity heatmap. Routing row has stacked routing decisions and a complexity-score heatmap.
+
+`docker-compose.yaml` uncomments the Grafana service and mounts both `grafana/provisioning` (read-only) and `grafana/dashboards` (read-only). Anonymous admin access enabled, login form disabled — `localhost:3000` lands you straight in the dashboard.
+
+**Cache lookup bug.** In `internal/server/handler.go`, the routing block (`if req.Model == "auto" { ... }`) was previously located *after* the cache lookup. Cache entries are partitioned per model in Redis (`cache:index:<model>`), so:
+- Lookup with `req.Model == "auto"` scanned `cache:index:auto` → always empty → MISS
+- Store happened later with `req.Model = "gemini-2.0-flash"` → entries piled up in `cache:index:gemini-2.0-flash`
+- No subsequent `auto` request could ever hit those entries
+
+Fix: relocated the routing block to immediately after the embedding step, before the `if cacheEnabled` lookup. The embedding step was already shared between caching and routing, so the fix is pure block-shuffling — no startup wiring or ONNX init concerns (those are construction-order constraints in `main.go`, not request-handler concerns).
+
+Side effect: routing decisions are now counted for cache-hit requests too. Arguably more honest — the routing classifier did run and pick a model — but a behavior change worth flagging. The obsidian doc previously stated "cache hits skip routing entirely"; that intent is now relaxed. The classifier cost is ~1ms per request, negligible.
+
+**Streaming cache cost fix.** `teeAndCache` was building cached responses without setting `CostUSD`, so every entry stored from a streaming request had `CostUSD = 0`. The hit branch's guard `if result.Response.CostUSD > 0` then prevented `CostSavedByCache` from ever incrementing on replays of streaming-origin entries. Added `resp.CostUSD = computeCost(model, resp.Usage, s.cfg.Costs)` before `cache.Store`.
+
+**Bucket tuning.**
+- `cache_similarity_score`: `.5, .7, .8, .85, .9, .92, .94, .96, .98, 1.0` → `.9, .92, .94, .96, .98, .99, 1.0`. We only observe hits (which are >= threshold = 0.92), so the lower buckets were dead weight. Kept `.9` as a safety bucket for future threshold tuning.
+- `request_duration_seconds`: `.05, .1, .25, .5, 1, 2, 5, 10, 30` → `.05, .1, .25, .5, 1, 2, 5, 10, 15, 20, 30, 60`. The 10s→30s gap caused p95/p99 to interpolate to ~28-30s for requests that actually completed in 12-15s.
+- `time_to_first_token_seconds`: `.05, .1, .2, .5, 1, 2, 5` → `.05, .1, .2, .5, 1, 2, 3, 5, 10`. Same problem at the upper end.
+- Inter-token latency buckets unchanged — already appropriate for ms-scale gaps.
+
+**Additional Notes:**
+- Completes the remaining Week 7 ops checklist items (Prometheus scrape config was already in place from a prior PR; this PR adds the Grafana side).
+- Existing cache entries that were stored before the streaming-CostUSD fix still have `CostUSD = 0` and will continue to record `$0 saved` on replay. Cache flush required to see the metric work end-to-end with old data.
+- Histogram bucket changes are technically breaking for the time series — Prometheus stores each bucket as a separate `_bucket{le="..."}` series. Old data with old buckets stays in TSDB; new data writes to new buckets. Quantile queries during the transition will be slightly weird until old data ages out. Not a concern for a learning project.
+- The dashboard JSON has been re-exported once via the Grafana UI (Save dashboard → JSON Model copy), which expanded the file from a hand-written ~380 lines to ~1100 lines of fully-defaulted Grafana 11.5 schema. That's the canonical format Grafana wants and what future UI exports will look like.
+- Future Week 7 follow-up worth considering: observing best-similarity scores on cache *misses* would let the histogram fill out its lower buckets, which would help with threshold tuning in Week 8. Requires `cache.Lookup` to return the best score even when below threshold. Deferred — not blocking.
+
