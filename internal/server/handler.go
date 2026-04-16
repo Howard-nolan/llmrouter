@@ -235,6 +235,7 @@ func (s *Server) teeAndCache(
 			if lastChunk.Usage != nil {
 				resp.Usage = *lastChunk.Usage
 			}
+			resp.CostUSD = computeCost(model, resp.Usage, s.cfg.Costs)
 
 			if err := s.cache.Store(ctx, embedding, model, resp); err != nil {
 				log.Printf("cache store error (streaming): %v", err)
@@ -390,6 +391,31 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Resolve "auto" to a concrete model before cache lookup. Cache
+	// entries are partitioned by model name, so looking up under "auto"
+	// would miss every entry stored under the routed model.
+	if req.Model == "auto" {
+		if s.modelRouter == nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error": "auto routing is not configured",
+			})
+			return
+		}
+
+		routed, err := s.modelRouter.Route(embedding, xRoute, xProvider)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error": "routing error: " + err.Error(),
+			})
+			return
+		}
+		req.Model = routed
+	}
+
 	if cacheEnabled {
 		result, err := s.cache.Lookup(r.Context(), embedding, req.Model)
 		if err != nil {
@@ -450,30 +476,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		metricCacheStatus = metrics.CacheSkip
 	}
 
-	// Step 3: Route "auto" requests to a concrete model.
-	if req.Model == "auto" {
-		if s.modelRouter == nil {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]string{
-				"error": "auto routing is not configured",
-			})
-			return
-		}
-
-		routed, err := s.modelRouter.Route(embedding, xRoute, xProvider)
-		if err != nil {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]string{
-				"error": "routing error: " + err.Error(),
-			})
-			return
-		}
-		req.Model = routed
-	}
-
-	// Step 4: Resolve the provider from the model name.
+	// Resolve the provider from the model name.
 	p, err := s.resolveProvider(req.Model)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")

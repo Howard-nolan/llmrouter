@@ -48,14 +48,14 @@ var (
 	RequestDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "llmrouter_request_duration_seconds",
 		Help:    "End-to-end request duration from handler entry to response completion.",
-		Buckets: []float64{.05, .1, .25, .5, 1, 2, 5, 10, 30},
+		Buckets: []float64{.05, .1, .25, .5, 1, 2, 5, 10, 15, 20, 30, 60},
 	}, []string{"provider", "model"})
 
 	// labels: provider, model
 	TimeToFirstToken = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "llmrouter_time_to_first_token_seconds",
 		Help:    "Time from request start to first streamed chunk.",
-		Buckets: []float64{.05, .1, .2, .5, 1, 2, 5},
+		Buckets: []float64{.05, .1, .2, .5, 1, 2, 3, 5, 10},
 	}, []string{"provider", "model"})
 
 	// labels: provider, model
@@ -106,7 +106,7 @@ var (
 	CacheSimilarity = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "llmrouter_cache_similarity_score",
 		Help:    "Best cosine similarity score from cache lookup, regardless of hit/miss threshold outcome.",
-		Buckets: []float64{.5, .7, .8, .85, .9, .92, .94, .96, .98, 1.0},
+		Buckets: []float64{.9, .92, .94, .96, .98, .99, 1.0},
 	}, []string{"result"})
 
 	// labels: strategy, selected_model
