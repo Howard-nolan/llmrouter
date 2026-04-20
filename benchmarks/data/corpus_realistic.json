@@ -1,0 +1,728 @@
+{
+  "source": "quora-question-pairs (GLUE train split)",
+  "seed": 7,
+  "profile": "realistic",
+  "n_clusters": 104,
+  "n_prompts": 199,
+  "clusters": [
+    {
+      "id": 0,
+      "prompts": [
+        "Dating and Relationships: How can I get over a break up?",
+        "How can one move on after a breakup?",
+        "How did you overcome your breakup?",
+        "How do I deal with a breakup?",
+        "How do I get over a break up?",
+        "How do I get over a breakup?",
+        "How do I get over an ex that I dated for two years?",
+        "How do I get over my first break up?",
+        "How do I get over the trauma of a breakup?",
+        "How do I move on after a very bad breakup?",
+        "How do I move on from breakup?",
+        "How do you move on after a break up?",
+        "How does one really move on from a break-up?",
+        "How one can deal with a breakup?",
+        "What are the steps one goes through getting over a breakup?"
+      ]
+    },
+    {
+      "id": 1,
+      "prompts": [
+        "What are the basics of Digital Marketing?",
+        "What are the basics to digital marketing?",
+        "What is a digital marketing?",
+        "What is digital marketing and how to set career in digital marketing?",
+        "What is digital marketing exactly?",
+        "What is digital marketing?",
+        "What is digital marketing?What are the basics of Digital Marketing?What is digital marketing strategy?Who needs digital marketing services?",
+        "What is exactly is digital marketing?"
+      ]
+    },
+    {
+      "id": 2,
+      "prompts": [
+        "Do you dislike Hilary Clinton? If so, please could you explain why?",
+        "How is it that people hate Hillary Clinton?",
+        "What are the reasons that people dislike Hillary Clinton?",
+        "Why do many distrust Hillary Clinton?",
+        "Why do people dislike Hillary Clinton? What has she done wrong?",
+        "Why do people dislike Hillary particularly? Anyway she's not the only corrupt politician, isnt she?",
+        "Why do people hate Hilary Clinton?",
+        "Why do people hate Hillary Clinton?"
+      ]
+    },
+    {
+      "id": 3,
+      "prompts": [
+        "Honestly what is the healthy minimum and maximum one can sleep?",
+        "How do I discover what is the minimum amount of sleep I need to function well?",
+        "How do I sleep the minimum amount of time without risking health?",
+        "Is there really a minimum amount of sleep that one requires to function properly or can each individual adapt to function off just a few hours?",
+        "Sleep Habits: What is the least amount of hours of sleep do I need in a working week?",
+        "What is the absolute bare minimum amount of sleep you need in order to stay healthy?",
+        "What is the least amount of sleep I need to survive?",
+        "What is the minimum time one requires to sleep to be a healthy person?"
+      ]
+    },
+    {
+      "id": 4,
+      "prompts": [
+        "What would the world be like if Nazi Germany had never lost the war?",
+        "What would the world be like if the Nazis had won?",
+        "What would the world be like now in 2016 if Hitler's Germany won the war?",
+        "What would the world look like if the Nazis won the war?"
+      ]
+    },
+    {
+      "id": 5,
+      "prompts": [
+        "What would be the best headphones to buy under INR 5k?",
+        "Which headphone is best under INR 5000?",
+        "Which is the best headphone below Rs. 5000?",
+        "Which is the best headphones under 5000?"
+      ]
+    },
+    {
+      "id": 6,
+      "prompts": [
+        "How can I find cheap flight ticket?",
+        "How do I get cheap flight tickets?",
+        "How do I get flight tickets cheap?",
+        "How do i book cheap flights?"
+      ]
+    },
+    {
+      "id": 7,
+      "prompts": [
+        "\"What lies at the \"\"edge\"\" of our universe?\"",
+        "Can we cross the border of our universe?",
+        "What is at the end of the universe?",
+        "What is the boundary of the universe? What is beyond that?"
+      ]
+    },
+    {
+      "id": 8,
+      "prompts": [
+        "What is it like to be raised by Indian mother?",
+        "What is it like to be raised by an Indian Mother?",
+        "What is it like to be raised by an Indian mother?",
+        "What is like to be raised by an Indian mother?"
+      ]
+    },
+    {
+      "id": 9,
+      "prompts": [
+        "Is India still a developing country?",
+        "Why India is still a developing country?",
+        "Why ia India still considered as a developing country?",
+        "Why india still known as a developing country?"
+      ]
+    },
+    {
+      "id": 10,
+      "prompts": [
+        "What do you absolutely hate about Quora?",
+        "What do you hate on Quora?",
+        "What is the one thing you hate about Quora?",
+        "Which things you dislike on Quora?"
+      ]
+    },
+    {
+      "id": 11,
+      "prompts": [
+        "If you recall your memory to the best you can, what is the oldest memory of your life? i.e What is the first memory in your life?",
+        "What is the oldest memory you can recall about your childhood?",
+        "What is the oldest memory you can recall?",
+        "What is the oldest memory you have of yourself?"
+      ]
+    },
+    {
+      "id": 12,
+      "prompts": [
+        "Does the medical profession know the cure to cancer?",
+        "Is there a possibility that there is already a cure for cancer?",
+        "Is there any cure for cancer?",
+        "Is there really a cure for all cancer?"
+      ]
+    },
+    {
+      "id": 13,
+      "prompts": [
+        "How much can you make on YouTube?",
+        "How much money do you earn by posting a video on YouTube?",
+        "How much money have you earned from YouTube?",
+        "How much one can earn from YouTube?"
+      ]
+    },
+    {
+      "id": 14,
+      "prompts": [
+        "What should I know about going to Japan?",
+        "What should I know before going to Japan?"
+      ]
+    },
+    {
+      "id": 15,
+      "prompts": [
+        "Can anyone read minds?",
+        "How can I read a human mind?"
+      ]
+    },
+    {
+      "id": 16,
+      "prompts": [
+        "What is the Lewis dot structure for H2CO3?",
+        "What is the Lewis structure for H2CO3? How is this determined?"
+      ]
+    },
+    {
+      "id": 17,
+      "prompts": [
+        "Why are Chinese so creative and innovative with IP filing over 1.1 m filing registration alone in year 2015 and leading the world again?",
+        "Why is China leading the world in the Patent filing with over 1.1m filing applications alone in year 2015 ?"
+      ]
+    },
+    {
+      "id": 18,
+      "prompts": [
+        "Where can I get a wide variety of products in Sydney for fire prevention?",
+        "Where can I get wide variety of services for fire protection across the Sydney?"
+      ]
+    },
+    {
+      "id": 19,
+      "prompts": [
+        "What do you think about the trailer of Raees?",
+        "What is your reaction on the trailer of Shahrukh Khan's Raees?"
+      ]
+    },
+    {
+      "id": 20,
+      "prompts": [
+        "What is your favorite reality TV show and what explains its popularity as a genre?",
+        "What\u2019s your favorite reality show?"
+      ]
+    },
+    {
+      "id": 21,
+      "prompts": [
+        "What are some interesting and unknown facts about Kanpur?",
+        "What is the best unknown fact about Kanpur City?"
+      ]
+    },
+    {
+      "id": 22,
+      "prompts": [
+        "What will happen if the earth goes out of orbit?",
+        "What would happen if Earth fell out of its orbit and became a rogue planet?"
+      ]
+    },
+    {
+      "id": 23,
+      "prompts": [
+        "What piece of advice would you give to a 12thee for the month of october? You can share your school days and experiences as well.",
+        "What piece of advice would you give to a 12thee in the month of october? You can share your school days and experiences as well."
+      ]
+    },
+    {
+      "id": 24,
+      "prompts": [
+        "What is the difference between billiards, pool and snooker?",
+        "What is the difference between billiards, snooker and pool?"
+      ]
+    },
+    {
+      "id": 25,
+      "prompts": [
+        "What do you think about Chinese girls?",
+        "What do you think of Chinese girls?"
+      ]
+    },
+    {
+      "id": 26,
+      "prompts": [
+        "What do you think of China's performance in Rio Olympic Games?",
+        "What do you think of Chinese athletes performance in Rio 2016 Olympics?"
+      ]
+    },
+    {
+      "id": 27,
+      "prompts": [
+        "Is Palestine a country or a state? What is the Israel and Palestine conflict?",
+        "Is Palestine a country, nation, and/or state?"
+      ]
+    },
+    {
+      "id": 28,
+      "prompts": [
+        "What are the properties in olive oil that can help fight blackheads?",
+        "What properties does olive oil have that can be used for curing acne?"
+      ]
+    },
+    {
+      "id": 29,
+      "prompts": [
+        "If you were given a chance to be somebody else for a day, who would you be?",
+        "If you were given a chance to be somebody else for one day, who would you be?"
+      ]
+    },
+    {
+      "id": 30,
+      "prompts": [
+        "How do I choose the right weight loss surgery?",
+        "How do i know which weight loss surgery is right for me?"
+      ]
+    },
+    {
+      "id": 31,
+      "prompts": [
+        "What are the benefits of me starting to use protein powder?",
+        "What's the benefit of eating protein powder?"
+      ]
+    },
+    {
+      "id": 32,
+      "prompts": [
+        "What is best site to analyze 23andme raw data?",
+        "Which tools can be used to analyze 23andMe raw data?"
+      ]
+    },
+    {
+      "id": 33,
+      "prompts": [
+        "Do vegans consider human products as ok to consume?",
+        "If vegans dont eat animal products do they consider breastfeeding allowable for their children?"
+      ]
+    },
+    {
+      "id": 34,
+      "prompts": [
+        "In your opinion, which countries have the most beautiful women?",
+        "Which country's women are most beautiful in the world?"
+      ]
+    },
+    {
+      "id": 35,
+      "prompts": [
+        "Should graphic designers learn Python?",
+        "Why should graphic designers learn Python?"
+      ]
+    },
+    {
+      "id": 36,
+      "prompts": [
+        "Did Hitler have any children?",
+        "Did Hitler have children and where are they?"
+      ]
+    },
+    {
+      "id": 37,
+      "prompts": [
+        "How can I tell if a child is introverted?",
+        "How do you tell if a person is an introvert?"
+      ]
+    },
+    {
+      "id": 38,
+      "prompts": [
+        "Why do people adopt instead of procreate?",
+        "Why do some people not want biological children but adopt instead?"
+      ]
+    },
+    {
+      "id": 39,
+      "prompts": [
+        "What are some of best IAS coaching centres in Chennai?",
+        "What are the best IAS coaching institutes in Chennai?"
+      ]
+    },
+    {
+      "id": 40,
+      "prompts": [
+        "How do I boost my creativity?",
+        "What can I do to boost my creativity?"
+      ]
+    },
+    {
+      "id": 41,
+      "prompts": [
+        "Bank PO can be cracked without coaching?",
+        "How do I crack a bank PO without coaching?"
+      ]
+    },
+    {
+      "id": 42,
+      "prompts": [
+        "Who are some of the best British hip-hop artists?",
+        "Who are the top British Hip Hop artists?"
+      ]
+    },
+    {
+      "id": 43,
+      "prompts": [
+        "How can I learn Kali Linux?",
+        "How do I get started with Kali Linux?"
+      ]
+    },
+    {
+      "id": 44,
+      "prompts": [
+        "My old damaged passport's cover and the name page is trimmed at top right corner by Indian consulate when they reissued me new passport?"
+      ]
+    },
+    {
+      "id": 45,
+      "prompts": [
+        "Can I use Cisco Packet Tracer on a Mac without installing Windows?"
+      ]
+    },
+    {
+      "id": 46,
+      "prompts": [
+        "Why do we get a muddy sound from some of the cheaper guitars?"
+      ]
+    },
+    {
+      "id": 47,
+      "prompts": [
+        "What are the different steps and chemicals involved in bleaching terry towels?"
+      ]
+    },
+    {
+      "id": 48,
+      "prompts": [
+        "At what age does a child form its own identity, to the extent that if you called them a different name, they would react/know?"
+      ]
+    },
+    {
+      "id": 49,
+      "prompts": [
+        "Is Blood of Olympus the end of the Percy Jackson series?"
+      ]
+    },
+    {
+      "id": 50,
+      "prompts": [
+        "How do you solve this geometry question about a triangle?"
+      ]
+    },
+    {
+      "id": 51,
+      "prompts": [
+        "What are the most important things for living a good life?"
+      ]
+    },
+    {
+      "id": 52,
+      "prompts": [
+        "How do government bonds affect corporate bonds?"
+      ]
+    },
+    {
+      "id": 53,
+      "prompts": [
+        "Is there clothings shopping app where I can buy products with itunes gift card in Europe?"
+      ]
+    },
+    {
+      "id": 54,
+      "prompts": [
+        "How do I find hidden files in the gallery of Mi4i phone with version MIUI7?"
+      ]
+    },
+    {
+      "id": 55,
+      "prompts": [
+        "What does 2+2x2+2 equal?"
+      ]
+    },
+    {
+      "id": 56,
+      "prompts": [
+        "What do you think about Aatmatrisha fest in PESIT or PES University?"
+      ]
+    },
+    {
+      "id": 57,
+      "prompts": [
+        "What aspects of English do non-native find the most difficult?"
+      ]
+    },
+    {
+      "id": 58,
+      "prompts": [
+        "Nomeniculature in chemistry?"
+      ]
+    },
+    {
+      "id": 59,
+      "prompts": [
+        "What measures to be taken to support girls education?"
+      ]
+    },
+    {
+      "id": 60,
+      "prompts": [
+        "What's the difference between variance and kurtosis?"
+      ]
+    },
+    {
+      "id": 61,
+      "prompts": [
+        "What does it feel like to be someone who loves getting high but doesn't have the stamina or body to handle it?"
+      ]
+    },
+    {
+      "id": 62,
+      "prompts": [
+        "How much money do I need to travel around and in Tokyo for 7 days? Can someone who's been there or lives there answer?"
+      ]
+    },
+    {
+      "id": 63,
+      "prompts": [
+        "Will smoking one cigarette per day lead to cancer?"
+      ]
+    },
+    {
+      "id": 64,
+      "prompts": [
+        "What attitude is a possible cause of a breakup in a relationship?"
+      ]
+    },
+    {
+      "id": 65,
+      "prompts": [
+        "What is the difference among symbols, hashes, strings, etc. on Ruby on Rails?"
+      ]
+    },
+    {
+      "id": 66,
+      "prompts": [
+        "How did Yahoo select the Flickr images to use in the Weather app?"
+      ]
+    },
+    {
+      "id": 67,
+      "prompts": [
+        "What should be the sequence of learning programming languages for ethical hacking?"
+      ]
+    },
+    {
+      "id": 68,
+      "prompts": [
+        "Can animals get depressed? Do animals commit suicide?"
+      ]
+    },
+    {
+      "id": 69,
+      "prompts": [
+        "Is 2S in trains comfortable?"
+      ]
+    },
+    {
+      "id": 70,
+      "prompts": [
+        "How I get australian visa?"
+      ]
+    },
+    {
+      "id": 71,
+      "prompts": [
+        "If someone deletes me from Snapchat (not blocked), will their name still be in my contact list?"
+      ]
+    },
+    {
+      "id": 72,
+      "prompts": [
+        "How many parents want to have twins?"
+      ]
+    },
+    {
+      "id": 73,
+      "prompts": [
+        "What are the best hotels in India that you have enjoyed?"
+      ]
+    },
+    {
+      "id": 74,
+      "prompts": [
+        "\"David Bowie's \"\"The Man Who Sold the World\"\": who is the man?\""
+      ]
+    },
+    {
+      "id": 75,
+      "prompts": [
+        "What is USA network synchronization in Telecom?"
+      ]
+    },
+    {
+      "id": 76,
+      "prompts": [
+        "Where do I learn bug bounty hunting in websites?"
+      ]
+    },
+    {
+      "id": 77,
+      "prompts": [
+        "What are some good reasons not to move to Denver?"
+      ]
+    },
+    {
+      "id": 78,
+      "prompts": [
+        "What should I do after completing BCA ?"
+      ]
+    },
+    {
+      "id": 79,
+      "prompts": [
+        "How do I remove the virus in my PC?"
+      ]
+    },
+    {
+      "id": 80,
+      "prompts": [
+        "What happens at the end of Birdman?"
+      ]
+    },
+    {
+      "id": 81,
+      "prompts": [
+        "How long does it take to get an American passport? What can delay the process in Florida?"
+      ]
+    },
+    {
+      "id": 82,
+      "prompts": [
+        "\"What are some words that start with \"\"I\"\" to describe someone?\""
+      ]
+    },
+    {
+      "id": 83,
+      "prompts": [
+        "Is it true that a day in prison is counted as 2 days?"
+      ]
+    },
+    {
+      "id": 84,
+      "prompts": [
+        "I'm getting distracted from my studies. How can I focus well on my studies?"
+      ]
+    },
+    {
+      "id": 85,
+      "prompts": [
+        "Why does India have Union territories?"
+      ]
+    },
+    {
+      "id": 86,
+      "prompts": [
+        "Are Quest Bars sold in Canada? If so, where?"
+      ]
+    },
+    {
+      "id": 87,
+      "prompts": [
+        "How girls flirt with a guy?"
+      ]
+    },
+    {
+      "id": 88,
+      "prompts": [
+        "How do I crack JP Morgon Round 2?"
+      ]
+    },
+    {
+      "id": 89,
+      "prompts": [
+        "What should I do about my college?"
+      ]
+    },
+    {
+      "id": 90,
+      "prompts": [
+        "Why is there no 2 Gorkha Rifles in the Indian army?"
+      ]
+    },
+    {
+      "id": 91,
+      "prompts": [
+        "\"What medical condition is described as \"\"throwing out\"\" one's back?\""
+      ]
+    },
+    {
+      "id": 92,
+      "prompts": [
+        "How do I get my curly hair back?"
+      ]
+    },
+    {
+      "id": 93,
+      "prompts": [
+        "\"What does it mean when your computer says \"\"the requested URL could not be retrieved\"\"?\""
+      ]
+    },
+    {
+      "id": 94,
+      "prompts": [
+        "What are some ways I can promote my blog through instagram?"
+      ]
+    },
+    {
+      "id": 95,
+      "prompts": [
+        "Who would win in a fight, Astro Boy or Super Man?"
+      ]
+    },
+    {
+      "id": 96,
+      "prompts": [
+        "How is a beach rock with a hole in it (like this one) formed naturally?"
+      ]
+    },
+    {
+      "id": 97,
+      "prompts": [
+        "I'm a high school student and I got contacted by a firm to do a complete redesign of their iOS and Android apps. How much should I charge?"
+      ]
+    },
+    {
+      "id": 98,
+      "prompts": [
+        "Why even bother to write answers when no one will appreciate them even if they are correct and even better than the top Quorans?"
+      ]
+    },
+    {
+      "id": 99,
+      "prompts": [
+        "How tough was the JEE Advanced 2015?"
+      ]
+    },
+    {
+      "id": 100,
+      "prompts": [
+        "How many residential buildings are there in the world?"
+      ]
+    },
+    {
+      "id": 101,
+      "prompts": [
+        "What is child development psychology?"
+      ]
+    },
+    {
+      "id": 102,
+      "prompts": [
+        "How close can you park to a fire hydrant in Washington?"
+      ]
+    },
+    {
+      "id": 103,
+      "prompts": [
+        "What is the full form of AAAC?"
+      ]
+    }
+  ]
+}

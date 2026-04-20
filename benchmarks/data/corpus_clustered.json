@@ -1,0 +1,409 @@
+{
+  "source": "quora-question-pairs (GLUE train split)",
+  "seed": 7,
+  "profile": "clustered",
+  "n_clusters": 40,
+  "n_prompts": 200,
+  "clusters": [
+    {
+      "id": 0,
+      "prompts": [
+        "How lndia USA relationship would be affected if Donald Trump becomes the President of USA?",
+        "How will India be affected if Donald Trump becomes the President of USA?",
+        "If Donald Trump becomes the president of USA, how will it affect India?",
+        "If Trump becomes President, how will it affect India?",
+        "If Trump becomes president, how will it affect India?"
+      ]
+    },
+    {
+      "id": 1,
+      "prompts": [
+        "Can you suggest some excellent documentaries on World War 2?",
+        "What are the best World War II documentaries?",
+        "What are the best documentaries about World War 2?",
+        "What documentaries about the history of World War 2 are the most entertaining and educational?",
+        "What is the best documentary about the Second World War?"
+      ]
+    },
+    {
+      "id": 2,
+      "prompts": [
+        "How can I use FaceTime on my laptop?",
+        "How can you FaceTime on a Mac laptop?",
+        "How can you get FaceTime for a Mac?",
+        "How do I make a FaceTime call from my Mac?",
+        "How do I use FaceTime on a Mac?"
+      ]
+    },
+    {
+      "id": 3,
+      "prompts": [
+        "How can one use Google Opinion rewards to get Pok\u00e9mon GO coins?",
+        "How do I get free Pokemon go coins?",
+        "How do I get free coins in Pokemon GO?",
+        "How do I get free pokecoins?",
+        "How do get free Pok\u00e9 coins?"
+      ]
+    },
+    {
+      "id": 4,
+      "prompts": [
+        "As an amateur singer, do I need permission from Artist / Producer to cover their songs?",
+        "Do I need a mechanical license to record a cover song, share that recording with friends, but never intend to sell it?",
+        "Do I need permission to record a cover song?",
+        "Do I need to acquire some sort of license in order to cover a song?",
+        "Song rights: Do I need permission to re-record a song?"
+      ]
+    },
+    {
+      "id": 5,
+      "prompts": [
+        "How can one be prepared for CAT?",
+        "How do I prepare for CAT 16 from now?",
+        "How do I prepare for CAT 2016?",
+        "How do I prepare for CAT?",
+        "How do I prepare for the CAT 2015 candidate?"
+      ]
+    },
+    {
+      "id": 6,
+      "prompts": [
+        "How did you know she/he is the one?",
+        "How do I know if she's the one for me?",
+        "How do I know that she's the one?",
+        "How do people know she is the one?",
+        "How do you know if she is the one for you?"
+      ]
+    },
+    {
+      "id": 7,
+      "prompts": [
+        "What are some good reads on digital marketing?",
+        "What is the best book about digital marketing?",
+        "What is the best book on digital marketing?",
+        "Which are best books on digital marketing?",
+        "Which are the best books on digital marketing?"
+      ]
+    },
+    {
+      "id": 8,
+      "prompts": [
+        "According to mainstream physics, what is there outside the Universe?",
+        "Is there anything beyond the universe?",
+        "Is there empty space outside the universe?",
+        "What is outside our universe? Also does it make sense to ask what is outside of the outside of universe?",
+        "What is there outside of the Universe?"
+      ]
+    },
+    {
+      "id": 9,
+      "prompts": [
+        "Can Donald Trump overturn gay marriage?",
+        "Can Trump repeal laws that allow gay marriages?",
+        "Do you think that Trump and Congress will retroactively end gay marriages?",
+        "How easy would it be for Trump to overturn gay marriage?",
+        "Will gay marriage be overturned with Donald Trump as President?"
+      ]
+    },
+    {
+      "id": 10,
+      "prompts": [
+        "How Islam spread around the world?",
+        "How did Islam spread outside Arabia?",
+        "How did Islam spread to all the world?",
+        "How did Islam spread?",
+        "What made Islam spread around the world faster than any other religion?"
+      ]
+    },
+    {
+      "id": 11,
+      "prompts": [
+        "Can I restore my deleted emails from a Gmail account?",
+        "How can I recover my emails from my Gmail account?",
+        "How can I recover my old mail from a Gmail account?",
+        "How can I retrieve and recover deleted items from my Gmail after mistakenly deleting and clearing trash?",
+        "How do I get deleted emails back from gmail?"
+      ]
+    },
+    {
+      "id": 12,
+      "prompts": [
+        "I am preparing for CS executive exams without any classes for December 15. Which self study books should I refer?",
+        "I will be appearing for CS Executive on December 16. I'm planning to do self-study. Which books can I study?",
+        "What are some recommended books for cs executive December 2016 for all subjects?",
+        "What are the best books for cs executive?",
+        "What books should be referred for Cs executive accounts and security law?"
+      ]
+    },
+    {
+      "id": 13,
+      "prompts": [
+        "How can I escape boredom?",
+        "How can I overcome boredom?",
+        "How did you beat boredom?",
+        "How do I beat boredom?",
+        "How do people deal with boredom?"
+      ]
+    },
+    {
+      "id": 14,
+      "prompts": [
+        "How did you meet your life partner?",
+        "How did you meet your lover now?",
+        "How did you meet your lover?",
+        "How or where did you meet your spouse/partner?",
+        "If you are in a serious relationship, where or how did you meet your partner?"
+      ]
+    },
+    {
+      "id": 15,
+      "prompts": [
+        "Are black holes real?",
+        "Do black holes exist?",
+        "Do blackholes exist?",
+        "Does a black hole exist in the universe? If so, what is the proof?",
+        "Does black hole exists?"
+      ]
+    },
+    {
+      "id": 16,
+      "prompts": [
+        "Do people find dimples attractive?",
+        "Why are dimples attractive?",
+        "Why are dimples hot on girls?",
+        "Why are dimples so attractive on gals?",
+        "Why are dimples such a cherished trait?"
+      ]
+    },
+    {
+      "id": 17,
+      "prompts": [
+        "How will it be after death? Where does the soul go?",
+        "What do we know (as of today) about what happens to our soul after we cease to physically exist?",
+        "What happens to a human soul after death?",
+        "What happens to the a person's soul after his/her death?",
+        "What happens to the soul after it leaves the body?"
+      ]
+    },
+    {
+      "id": 18,
+      "prompts": [
+        "Do Sportspersons representing India severally responsible for poor performance of India in Rio Olympics?",
+        "What are the reason of poor performance of India in Rio 2016 while expectations were too high?",
+        "Who should be blamed for the poor performance of India in Rio Olympics?",
+        "Why India is not able to perform well in Rio Olympic 2016 as compare to London and Beijing Olympics?",
+        "Why India is not performing in Rio Olympics?"
+      ]
+    },
+    {
+      "id": 19,
+      "prompts": [
+        "Is the United States a Republic or a Democracy?",
+        "Is the United States a republic or a democracy?",
+        "Is the United States a true democracy or a republic?",
+        "Is the United States of America a republic or a democracy?",
+        "Is the United States truly a democracy?"
+      ]
+    },
+    {
+      "id": 20,
+      "prompts": [
+        "How can I study faster and more efficiently?",
+        "How can I study law more efficiently, faster and retain more information?",
+        "How can I study more efficiently when tired and under stress?",
+        "How can I study more efficiently?",
+        "How do I study faster and more efficiently?"
+      ]
+    },
+    {
+      "id": 21,
+      "prompts": [
+        "How do I find someone to help me hack my cheating wife's phone?",
+        "How do I get a hack done on my wife's phone?",
+        "How do I hack my mans phone?",
+        "How do I hack my wife's phone?",
+        "I want to hack into my wife's phone. who can help me with reliable hackers?"
+      ]
+    },
+    {
+      "id": 22,
+      "prompts": [
+        "Can demonetization help India or not?",
+        "How Modi's demonestation affect the people living in India?",
+        "How do you think demonetisation will affect Indian economy?",
+        "How is demonetization affecting people of India?",
+        "How is demonetization helping India?"
+      ]
+    },
+    {
+      "id": 23,
+      "prompts": [
+        "Can I meditate to get supernatural powers?",
+        "Can we attain supernatural powers by meditation?",
+        "Can we get supernatural power from meditation?",
+        "Is it possible to gain supernatural powers through meditation?",
+        "Is it possible to occupy supernatural powers by meditation?"
+      ]
+    },
+    {
+      "id": 24,
+      "prompts": [
+        "\"They say that the universe is forever expanding, if so, what is it expanding \"\"into\"\"?\"",
+        "If the Big Bang created space-time, then what is the universe currently expanding into?",
+        "If the universe is everything in space and time, what is is expanding into? Will we ever actually know everything about the universe?",
+        "If the universe is everything, and scientists say that the universe is expanding, what is it expanding into?",
+        "If the universe is expanding, then what does it expand into?"
+      ]
+    },
+    {
+      "id": 25,
+      "prompts": [
+        "Did Paul McCartney die and get replaced?",
+        "Did the real Paul McCartney of the Beatles die in a car crash in 1966?",
+        "Is Paul McCartney dead?",
+        "Is it definitively true that Sir Paul McCartney died in 1966?",
+        "Was Paul McCartney replaced by a lookalike?"
+      ]
+    },
+    {
+      "id": 26,
+      "prompts": [
+        "What are some best travel hack?",
+        "What are the best travel hacks to travel cheap around the world?",
+        "What are the best travel hacks you know?",
+        "What are the top travel hacks?",
+        "What is the best travel hack?"
+      ]
+    },
+    {
+      "id": 27,
+      "prompts": [
+        "Do waist cinchers really work? If so, how?",
+        "Do waist trainers work?",
+        "Does waist training really work?",
+        "Does waist training work?",
+        "How does the waist trainer work?"
+      ]
+    },
+    {
+      "id": 28,
+      "prompts": [
+        "Do you think Narendra Modi is a corrupted politician?",
+        "How clean is prime minister Narendra Modi in terms of corruption?",
+        "How corrupt is Narendra Modi?",
+        "How corrupt is Prime Minister Narendra Modi Government?",
+        "How corrupted is Narendra Modi?"
+      ]
+    },
+    {
+      "id": 29,
+      "prompts": [
+        "What are the common puzzles asked in an interview?",
+        "What are the hardest puzzles asked in interview?",
+        "What are the puzzles asked in an interview?",
+        "What are the puzzles asked in interview?",
+        "What are the standard puzzles asked in interviews?"
+      ]
+    },
+    {
+      "id": 30,
+      "prompts": [
+        "Where can I buy best quality customized cupcakes in Gold Coast?",
+        "Where can I buy best quality gourmet cupcakes in Gold Coast?",
+        "Where can I buy delicious, fresh & hand made cup cakes across the Gold Coast?",
+        "Where can I buy special flavor cupcake at Gold Coast?",
+        "Where can I buy very incredible and most amazing cupcakes in Gold Coast?"
+      ]
+    },
+    {
+      "id": 31,
+      "prompts": [
+        "What are the different parts of a compound light microscope? What are their functions?",
+        "What are the different parts of a compound microscope? What are their functions?",
+        "What are the different parts of a microscope? What are their functions?",
+        "What are the parts and functions of a light microscope?",
+        "What parts make up a microscope? What is the function of each part?"
+      ]
+    },
+    {
+      "id": 32,
+      "prompts": [
+        "What are some good ways to drive traffic to my blog?",
+        "What are some of the best ways to promote your blog?",
+        "What are the best ways to get subscribers on a blog?",
+        "What are the most effective ways to promote a blog?",
+        "What are the most effective ways to promote blogs?"
+      ]
+    },
+    {
+      "id": 33,
+      "prompts": [
+        "How does Quora decide the order of the answers to a question?",
+        "How does Quora determine the order in which answers to a given question appear?",
+        "How does Quora determine the top answer?",
+        "How does Quora sort multiple answers for a question?",
+        "How does Quora work in terms of deciding which answer is the best answer?"
+      ]
+    },
+    {
+      "id": 34,
+      "prompts": [
+        "What are some interesting questions asked in an interview?",
+        "What are the best questions to ask during an interview?",
+        "What are the most interesting questions asked in any interview?",
+        "What is the best question asked in your interview?",
+        "What is the most interesting question you've been asked in an interview?"
+      ]
+    },
+    {
+      "id": 35,
+      "prompts": [
+        "What are some best Digital marketing courses in India?",
+        "What are some good digital courses in India?",
+        "Where is the best online digital marketing course?",
+        "Which is the best digital marketing course in india?",
+        "Which is the best digital media course in India?"
+      ]
+    },
+    {
+      "id": 36,
+      "prompts": [
+        "How can I get rid of a cold quickly and effectively?",
+        "How do I get rid of a cold fast?",
+        "How do I get rid of a cold immediately?",
+        "What would be the fastest way to get rid of a cold?",
+        "What's the quickest way to get rid of a cold?"
+      ]
+    },
+    {
+      "id": 37,
+      "prompts": [
+        "How can I develop my profile to apply to top 20 global B-schools?",
+        "How do I build my profile for Harvard, Wharton, INSEAD etc.?",
+        "How do I build my profile for top B-schools?",
+        "How do I improve my profile for admission to business schools?",
+        "How should I build my profile for top business schools?"
+      ]
+    },
+    {
+      "id": 38,
+      "prompts": [
+        "How can I effectively lose belly fat?",
+        "How can I lose body fat in my belly and chest?",
+        "How can I quickly get rid of belly fat as a male?",
+        "How can I tighten my body and get rid of tummy/belly fat?",
+        "How do I get rid of belly fat and thigh fat?"
+      ]
+    },
+    {
+      "id": 39,
+      "prompts": [
+        "Can your PC really get attacked on the deep web?",
+        "How unsafe the deep web is?",
+        "Is deep web really that dangerous?",
+        "Is it safe to access the deep web?",
+        "Is it safe to use the deep Web?"
+      ]
+    }
+  ]
+}
