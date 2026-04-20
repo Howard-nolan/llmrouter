@@ -35,5 +35,8 @@ training/*.onnx
 training/*.jsonl
 training/data/
 
+# Benchmarks (generated corpora, reproducible via build_corpus.py)
+benchmarks/data/
+
 # Docker
 docker-compose.override.yaml
