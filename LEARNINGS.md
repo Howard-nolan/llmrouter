@@ -628,3 +628,43 @@ Side effect: routing decisions are now counted for cache-hit requests too. Argua
 - The dashboard JSON has been re-exported once via the Grafana UI (Save dashboard → JSON Model copy), which expanded the file from a hand-written ~380 lines to ~1100 lines of fully-defaulted Grafana 11.5 schema. That's the canonical format Grafana wants and what future UI exports will look like.
 - Future Week 7 follow-up worth considering: observing best-similarity scores on cache *misses* would let the histogram fill out its lower buckets, which would help with threshold tuning in Week 8. Requires `cache.Lookup` to return the best score even when below threshold. Deferred — not blocking.
 
+
+## 2026-04-20 - PR #29: Add Week 8 corpus builder and benchmark harness skeleton
+
+**Change Summary:**
+- Python `training/build_corpus.py` extracts two benchmark corpora from Quora Question Pairs: a **clustered** corpus (40×5 dense paraphrases) for threshold sweeps, and a **realistic** corpus (~199 prompts, power-law distribution) for cost-savings measurement. Corpora share no prompts (enforced via `used` set).
+- Go `benchmarks/cache_bench_test.go` is a v1 end-to-end harness gated with `//go:build bench` — drives a running gateway with shuffled corpus prompts, records per-request metadata from response headers, and reports aggregate stats.
+- Adds `networkx` to `training/pyproject.toml` for duplicate-graph construction.
+
+**How It Works:**
+**Corpus builder** (`training/build_corpus.py`):
+1. Loads QQP (GLUE train split) via HuggingFace `datasets`, filters each question by length bounds and a crude NSFW blocklist.
+2. Builds an undirected graph where edges = labeled duplicates. `all_clean` tracks every clean question so questions never in the graph form the singleton pool.
+3. `select_clustered` grabs 40 components of size ≥5, truncated to 5 prompts each. Populates a `used` set.
+4. `select_realistic` walks a declarative `REALISTIC_SHAPE = [(1,15), (3,8), (10,4), (30,2), (60,1)]` — hot clusters first to claim rare large components before pairs compete.
+5. Emits two JSONs to `benchmarks/data/` plus a stdout preview for eyeballing label quality before committing.
+
+**Benchmark harness** (`benchmarks/cache_bench_test.go`):
+- Configured via env vars: `LLMROUTER_URL` (default `localhost:8080`), `LLMROUTER_CORPUS` (default realistic), `LLMROUTER_MODEL` (default `auto`).
+- Flattens + shuffles prompts with `rand.NewPCG` seeded from `corpus.seed` for reproducibility.
+- `POST /cache/flush` at start so hit rate reflects *this* corpus run.
+- Scrapes `/metrics` before and after; diffs `llmrouter_cost_saved_by_cache_usd_total` across all label pairs to compute cost saved.
+- Per request: constructs OpenAI-format body, sends non-streaming, reads `X-LLMRouter-Cache`, `-Cost-USD`, `-Similarity`, `-Provider`, `-Model`, measures wall-clock latency.
+- Summary: count, hit rate, actual cost, cost saved, savings rate, p50/p95/p99 split by hit vs miss.
+- Single `httpClient` with 120s timeout; `io.Copy(io.Discard, resp.Body)` to enable connection reuse.
+
+Run with:
+```
+docker-compose up -d
+go run ./cmd/llmrouter   # in another terminal
+go test -v -tags bench -run TestCacheBenchmark ./benchmarks/ -timeout 30m
+```
+
+**Additional Notes:**
+- Week 8 scope: this lands corpus + harness infrastructure. Remaining Week 8 work: run threshold sweep (likely offline — embed prompts once, derive hit-rate-vs-threshold curve from pairwise cosine math), run realistic corpus for cost headline, LLM-as-judge quality scoring over cache hits, latency percentile tuning.
+- Two corpora by design: threshold curves need dense paraphrase pairs for signal; cost savings need realistic traffic distribution. One corpus compromises one goal. Quality-vs-threshold is workload-independent, so the threshold chosen on clustered data applies to realistic.
+- Design choices: sequential (no concurrency) in v1 for deterministic runs; external gateway (not in-process) so we measure the real system with Redis + ONNX + provider HTTP; non-streaming requests (TTFT/inter-token are captured via Week 7 metrics independently).
+- QQP labels are noisy — the script prints all sampled clusters to stdout so you can eyeball before running. Added a coarse NSFW blocklist after first run surfaced crude content; substring match may false-positive (e.g., "essex") but unlikely at this corpus size.
+- Power-law shape `[(1,15), (3,8), (10,4), (30,2), (60,1)]` is a tunable constant. If `(1,15)` starves after the clustered corpus claims large components, fall back to `(1,12)` or `(2,8)`.
+- Stale `benchmarks/data/corpus.json` from an earlier single-output script version is intentionally not staged — ignore/delete locally.
+
