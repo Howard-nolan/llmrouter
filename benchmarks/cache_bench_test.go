@@ -48,6 +48,12 @@ func TestCacheBenchmark(t *testing.T) {
 	baseURL := getEnv("LLMROUTER_URL", "http://localhost:8080")
 	corpusPath := getEnv("LLMROUTER_CORPUS", "data/corpus_realistic.json")
 	model := getEnv("LLMROUTER_MODEL", "auto")
+	concurrency := 3
+	if v := os.Getenv("LLMROUTER_CONCURRENCY"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			concurrency = n
+		}
+	}
 
 	corpus, err := loadCorpus(corpusPath)
 	if err != nil {
@@ -68,18 +74,41 @@ func TestCacheBenchmark(t *testing.T) {
 		t.Fatalf("scrape metrics (before): %v", err)
 	}
 
-	fmt.Printf("Running %d prompts against %s (model=%s)\n", len(prompts), baseURL, model)
+	fmt.Printf("Running %d prompts against %s (model=%s, concurrency=%d)\n",
+		len(prompts), baseURL, model, concurrency)
 	results := make([]Result, 0, len(prompts))
 	runStart := time.Now()
 
-	for i, p := range prompts {
-		res, err := sendRequest(baseURL, model, p)
-		if err != nil {
-			t.Fatalf("request %d (%q): %v", i, truncate(p, 60), err)
+	type outcome struct {
+		res       Result
+		err       error
+		promptIdx int
+	}
+	jobs := make(chan int, len(prompts))
+	out := make(chan outcome, len(prompts))
+
+	for w := 0; w < concurrency; w++ {
+		go func() {
+			for i := range jobs {
+				res, err := sendRequest(baseURL, model, prompts[i])
+				out <- outcome{res: res, err: err, promptIdx: i}
+			}
+		}()
+	}
+	for i := range prompts {
+		jobs <- i
+	}
+	close(jobs)
+
+	for i := 0; i < len(prompts); i++ {
+		o := <-out
+		if o.err != nil {
+			t.Fatalf("request %d (%q): %v", o.promptIdx, truncate(prompts[o.promptIdx], 60), o.err)
 		}
-		results = append(results, res)
-		if (i+1)%25 == 0 || i+1 == len(prompts) {
-			fmt.Printf("  %d/%d (elapsed %s)\n", i+1, len(prompts), time.Since(runStart).Round(time.Second))
+		results = append(results, o.res)
+		done := i + 1
+		if done%25 == 0 || done == len(prompts) {
+			fmt.Printf("  %d/%d (elapsed %s)\n", done, len(prompts), time.Since(runStart).Round(time.Second))
 		}
 	}
 
@@ -137,7 +166,7 @@ func sendRequest(baseURL, model, prompt string) (Result, error) {
 		"messages": []map[string]string{
 			{"role": "user", "content": prompt},
 		},
-		"stream":     false,
+		"stream":     true,
 		"max_tokens": 512,
 	})
 	if err != nil {
@@ -152,7 +181,6 @@ func sendRequest(baseURL, model, prompt string) (Result, error) {
 
 	start := time.Now()
 	resp, err := httpClient.Do(req)
-	latency := time.Since(start)
 	if err != nil {
 		return Result{}, err
 	}
@@ -162,17 +190,42 @@ func sendRequest(baseURL, model, prompt string) (Result, error) {
 		errBody, _ := io.ReadAll(resp.Body)
 		return Result{}, fmt.Errorf("status %d: %s", resp.StatusCode, errBody)
 	}
-	io.Copy(io.Discard, resp.Body)
+
+	// Parse SSE stream: each event is "data: {json}\n\n", terminated by
+	// "data: [DONE]". Only the final chunk carries cost_usd.
+	var costUSD float64
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		payload := strings.TrimPrefix(line, "data: ")
+		if payload == "[DONE]" {
+			break
+		}
+		var chunk struct {
+			CostUSD *float64 `json:"cost_usd"`
+		}
+		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+			continue
+		}
+		if chunk.CostUSD != nil {
+			costUSD = *chunk.CostUSD
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return Result{}, fmt.Errorf("scan SSE: %w", err)
+	}
+	latency := time.Since(start)
 
 	res := Result{
 		Prompt:   prompt,
 		Provider: resp.Header.Get("X-LLMRouter-Provider"),
 		Model:    resp.Header.Get("X-LLMRouter-Model"),
 		CacheHit: resp.Header.Get("X-LLMRouter-Cache") == "HIT",
+		CostUSD:  costUSD,
 		Latency:  latency,
-	}
-	if v := resp.Header.Get("X-LLMRouter-Cost-USD"); v != "" {
-		res.CostUSD, _ = strconv.ParseFloat(v, 64)
 	}
 	if v := resp.Header.Get("X-LLMRouter-Similarity"); v != "" {
 		res.Similarity, _ = strconv.ParseFloat(v, 64)
@@ -216,13 +269,13 @@ func summarize(results []Result, costSaved float64, wallTime time.Duration) {
 	var hitLat, missLat []time.Duration
 
 	for _, r := range results {
-		actualCost += r.CostUSD
 		if r.CacheHit {
 			hits++
 			hitLat = append(hitLat, r.Latency)
 		} else {
 			misses++
 			missLat = append(missLat, r.Latency)
+			actualCost += r.CostUSD
 		}
 	}
 

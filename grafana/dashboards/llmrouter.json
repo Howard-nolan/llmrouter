@@ -210,7 +210,7 @@
       "pluginVersion": "11.5.0",
       "targets": [
         {
-          "expr": "sum(rate(llmrouter_provider_errors_total[1m])) by (error_type)",
+          "expr": "sum(rate(llmrouter_provider_errors_total[1m])) by (error_type) or vector(0)",
           "legendFormat": "{{error_type}}",
           "refId": "A"
         }
