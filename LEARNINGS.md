@@ -668,3 +668,23 @@ go test -v -tags bench -run TestCacheBenchmark ./benchmarks/ -timeout 30m
 - Power-law shape `[(1,15), (3,8), (10,4), (30,2), (60,1)]` is a tunable constant. If `(1,15)` starves after the clustered corpus claims large components, fall back to `(1,12)` or `(2,8)`.
 - Stale `benchmarks/data/corpus.json` from an earlier single-output script version is intentionally not staged — ignore/delete locally.
 
+
+## 2026-04-22 - PR #30: Week 8 harness: streaming + concurrency; dashboard and header fixes
+
+**Change Summary:**
+- **Harness switched to streaming with a configurable concurrent worker pool.** `benchmarks/cache_bench_test.go` now sends `stream: true`, parses the SSE stream to extract `cost_usd` from the final chunk, and fans out requests across N goroutines (`LLMROUTER_CONCURRENCY`, default 3). Captures true wall-clock latency (was TTFB) and only accumulates `actualCost` on cache misses, so hit-body `cost_usd` from replayed responses doesn't double-count against the cache-savings metric.
+- **Cache-hit responses now carry provider/model headers.** `internal/server/handler.go` previously only set `X-LLMRouter-Provider` and `X-LLMRouter-Model` on the cache-miss branch; the cache-hit branch now emits them too, so downstream consumers (dashboards, harness, API clients) see consistent labels regardless of path.
+- **Error-rate Grafana panel fixed to render zero when no errors.** `grafana/dashboards/llmrouter.json` query gets `or vector(0)` fallback so the panel shows a 0 line during clean runs instead of "No data."
+
+**How It Works:**
+- **SSE parser:** `bufio.Scanner` over the response body, filter on `data: ` prefix, break on `[DONE]`. Each chunk decoded into a struct with a single `CostUSD *float64` field; the pointer distinguishes "absent" (normal intermediate chunks) from "zero." The final chunk carries both `usage` and `cost_usd` per the existing stream writer (`internal/stream/stream.go`), so the loop just captures the last non-nil value.
+- **Worker pool:** unbuffered would deadlock on first-error; both `jobs` and `outcomes` channels are buffered to `len(prompts)` so producers never block. Workers `range` over `jobs`, which exits cleanly on `close(jobs)`. `outcome` struct carries `{res, err, promptIdx}`. The main goroutine drains exactly `len(prompts)` outcomes and is the only place `t.Fatalf` is called (per Go docs, `FailNow`/`Fatalf` are unsafe from spawned goroutines).
+- **Cost accounting:** cache hits still emit `cost_usd` in the replayed body (inherited from the original miss that populated the entry), so the old logic of `actualCost += r.CostUSD` over every iteration double-counted. The fix: gate on `!r.CacheHit`, so `actualCost` reflects only what was actually spent on providers this run, and the `savings_rate` denominator (`actualCost + costSaved`) is honest.
+- **Header parity:** cache-hit branch already computes `metricProvider` and `metricModel` for metrics; reusing those values for headers is two lines of code. Case (a) unconditional set was chosen: if `metricProvider` is empty (stored model is orphaned from config), the header goes out blank — a diagnostic signal rather than a failure.
+
+**Additional Notes:**
+- Week 8: this PR covers harness iteration; threshold tuning (offline sweep + LLM-as-judge quality scoring + realistic cost bench + end-to-end quality eval) is still ahead. See `projects/llmrouter.md` for the full 8-step tuning plan.
+- Known half-run observations (from a partial run with these changes): latency trends upward over the run (suspected Anthropic rate-limit retries); cache-hit-rate panel shows 0.0% in red during idle (same `or vector(0)` trick could apply but wasn't part of this PR's scope); complexity-vs-routing panels looked contradictory on small N — to be re-evaluated on a full run.
+- Latency semantics change: non-streaming `latency = time.Since(start)` after `httpClient.Do()` was TTFB (headers-only). Streaming version moves the capture to after the scanner drains — now measures total response time including full body. Miss-latency numbers in future summaries will therefore be slightly higher than pre-PR, all else equal.
+- `t.Fatalf` on first worker error leaks the remaining in-flight goroutines (they block on `out <-`) until the test binary exits. Acceptable for a bench harness; adding `context.Context` cancellation would be ceremony.
+
