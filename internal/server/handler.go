@@ -430,6 +430,8 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			if p, ok := s.models[metricModel]; ok {
 				metricProvider = p.Name()
 			}
+			w.Header().Set("X-LLMRouter-Provider", metricProvider)
+			w.Header().Set("X-LLMRouter-Model", metricModel)
 			metrics.CacheSimilarity.WithLabelValues("hit").Observe(result.Similarity)
 			if result.Response.CostUSD > 0 && metricProvider != "" {
 				metrics.CostSavedByCache.WithLabelValues(metricProvider, metricModel).Add(result.Response.CostUSD)
