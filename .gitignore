@@ -38,5 +38,8 @@ training/data/
 # Benchmarks (generated corpora, reproducible via build_corpus.py)
 benchmarks/data/
 
+# Python benchmark venv (reproducible via `uv sync`)
+benchmarks/python/.venv/
+
 # Docker
 docker-compose.override.yaml

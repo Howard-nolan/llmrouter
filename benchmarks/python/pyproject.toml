@@ -1,0 +1,14 @@
+[project]
+name = "sweep"
+version = "0.1.0"
+description = "Offline similarity-threshold sweep for llmrouter cache benchmarks"
+readme = "README.md"
+authors = [
+    { name = "Howard", email = "howard.nolan6@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "matplotlib>=3.10.9",
+    "numpy>=2.4.4",
+    "sentence-transformers>=5.4.1",
+]
