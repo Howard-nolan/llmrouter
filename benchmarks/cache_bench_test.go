@@ -33,13 +33,27 @@ type Cluster struct {
 }
 
 type Result struct {
-	Prompt     string
-	CacheHit   bool
-	Similarity float64
-	CostUSD    float64
-	Provider   string
-	Model      string
-	Latency    time.Duration
+	Prompt       string
+	ResponseText string
+	CacheHit     bool
+	Similarity   float64
+	CostUSD      float64
+	Provider     string
+	Model        string
+	Latency      time.Duration
+	TTFT         time.Duration
+}
+
+type LogRecord struct {
+	Prompt           string  `json:"prompt"`
+	GatewayResponse  string  `json:"gateway_response"`
+	BaselineResponse string  `json:"baseline_response"`
+	CacheHit         bool    `json:"cache_hit"`
+	Similarity       float64 `json:"similarity"`
+	ModelRouted      string  `json:"model_routed"`
+	CostUSD          float64 `json:"cost_usd"`
+	TTFTMs           float64 `json:"ttft_ms"`
+	LatencyMs        float64 `json:"latency_ms"`
 }
 
 var httpClient = &http.Client{Timeout: 120 * time.Second}
@@ -64,6 +78,32 @@ func TestCacheBenchmark(t *testing.T) {
 
 	prompts := flattenAndShuffle(corpus)
 
+	// Logging mode: when LLMROUTER_LOG_PATH is set, write one JSONL
+	// record per request. On every HIT, issue a second X-Cache: skip
+	// call to capture a fresh baseline_response (the cached response
+	// was generated for a different prompt — baseline shows fresh
+	// quality for THIS prompt). When LLMROUTER_BASELINE_MODEL is also
+	// set, additionally baseline on misses whose routed model differs
+	// from the baseline model — used for the realistic-corpus bench
+	// where we want to evaluate cheap-routed responses against the
+	// quality model. Quality-routed misses (routed model == baseline
+	// model) skip the baseline since it would be same-model noise.
+	logPath := os.Getenv("LLMROUTER_LOG_PATH")
+	baselineModel := os.Getenv("LLMROUTER_BASELINE_MODEL")
+	var logFile *os.File
+	if logPath != "" {
+		logFile, err = os.Create(logPath)
+		if err != nil {
+			t.Fatalf("create log file: %v", err)
+		}
+		defer logFile.Close()
+		extra := ""
+		if baselineModel != "" {
+			extra = fmt.Sprintf(", baseline-model=%s on cheap-routed misses", baselineModel)
+		}
+		fmt.Printf("Log: %s (baseline on HITs%s)\n", logPath, extra)
+	}
+
 	fmt.Println("Flushing cache...")
 	if err := flushCache(baseURL); err != nil {
 		t.Fatalf("flush cache: %v", err)
@@ -80,9 +120,10 @@ func TestCacheBenchmark(t *testing.T) {
 	runStart := time.Now()
 
 	type outcome struct {
-		res       Result
-		err       error
-		promptIdx int
+		res          Result
+		baselineText string
+		err          error
+		promptIdx    int
 	}
 	jobs := make(chan int, len(prompts))
 	out := make(chan outcome, len(prompts))
@@ -90,8 +131,32 @@ func TestCacheBenchmark(t *testing.T) {
 	for w := 0; w < concurrency; w++ {
 		go func() {
 			for i := range jobs {
-				res, err := sendRequest(baseURL, model, prompts[i])
-				out <- outcome{res: res, err: err, promptIdx: i}
+				res, err := sendRequest(baseURL, model, prompts[i], false)
+				if err != nil {
+					out <- outcome{err: err, promptIdx: i}
+					continue
+				}
+				var baseline string
+				if logFile != nil {
+					// Baseline triggers on HIT (cached response was for a
+					// different prompt) OR on a miss whose routed model
+					// differs from the configured baseline model.
+					needBaseline := res.CacheHit ||
+						(baselineModel != "" && res.Model != baselineModel)
+					if needBaseline {
+						bm := baselineModel
+						if bm == "" {
+							bm = model
+						}
+						bres, berr := sendRequest(baseURL, bm, prompts[i], true)
+						if berr != nil {
+							out <- outcome{err: fmt.Errorf("baseline call: %w", berr), promptIdx: i}
+							continue
+						}
+						baseline = bres.ResponseText
+					}
+				}
+				out <- outcome{res: res, baselineText: baseline, promptIdx: i}
 			}
 		}()
 	}
@@ -100,12 +165,33 @@ func TestCacheBenchmark(t *testing.T) {
 	}
 	close(jobs)
 
+	var logEncoder *json.Encoder
+	if logFile != nil {
+		logEncoder = json.NewEncoder(logFile)
+	}
+
 	for i := 0; i < len(prompts); i++ {
 		o := <-out
 		if o.err != nil {
 			t.Fatalf("request %d (%q): %v", o.promptIdx, truncate(prompts[o.promptIdx], 60), o.err)
 		}
 		results = append(results, o.res)
+		if logEncoder != nil {
+			rec := LogRecord{
+				Prompt:           o.res.Prompt,
+				GatewayResponse:  o.res.ResponseText,
+				BaselineResponse: o.baselineText,
+				CacheHit:         o.res.CacheHit,
+				Similarity:       o.res.Similarity,
+				ModelRouted:      o.res.Model,
+				CostUSD:          o.res.CostUSD,
+				TTFTMs:           float64(o.res.TTFT.Microseconds()) / 1000.0,
+				LatencyMs:        float64(o.res.Latency.Microseconds()) / 1000.0,
+			}
+			if err := logEncoder.Encode(rec); err != nil {
+				t.Fatalf("write log record: %v", err)
+			}
+		}
 		done := i + 1
 		if done%25 == 0 || done == len(prompts) {
 			fmt.Printf("  %d/%d (elapsed %s)\n", done, len(prompts), time.Since(runStart).Round(time.Second))
@@ -160,7 +246,7 @@ func flushCache(baseURL string) error {
 	return nil
 }
 
-func sendRequest(baseURL, model, prompt string) (Result, error) {
+func sendRequest(baseURL, model, prompt string, skipCache bool) (Result, error) {
 	body, err := json.Marshal(map[string]any{
 		"model": model,
 		"messages": []map[string]string{
@@ -178,6 +264,9 @@ func sendRequest(baseURL, model, prompt string) (Result, error) {
 		return Result{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if skipCache {
+		req.Header.Set("X-Cache", "skip")
+	}
 
 	start := time.Now()
 	resp, err := httpClient.Do(req)
@@ -192,23 +281,38 @@ func sendRequest(baseURL, model, prompt string) (Result, error) {
 	}
 
 	// Parse SSE stream: each event is "data: {json}\n\n", terminated by
-	// "data: [DONE]". Only the final chunk carries cost_usd.
+	// "data: [DONE]". Concatenate delta.content across chunks for the
+	// assistant message text; cost_usd appears only on the final chunk.
+	// TTFT = wall time from request send to first data event.
 	var costUSD float64
+	var text strings.Builder
+	var firstDataAt time.Time
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "data: ") {
 			continue
 		}
+		if firstDataAt.IsZero() {
+			firstDataAt = time.Now()
+		}
 		payload := strings.TrimPrefix(line, "data: ")
 		if payload == "[DONE]" {
 			break
 		}
 		var chunk struct {
+			Choices []struct {
+				Delta struct {
+					Content string `json:"content"`
+				} `json:"delta"`
+			} `json:"choices"`
 			CostUSD *float64 `json:"cost_usd"`
 		}
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
 			continue
+		}
+		if len(chunk.Choices) > 0 {
+			text.WriteString(chunk.Choices[0].Delta.Content)
 		}
 		if chunk.CostUSD != nil {
 			costUSD = *chunk.CostUSD
@@ -218,14 +322,20 @@ func sendRequest(baseURL, model, prompt string) (Result, error) {
 		return Result{}, fmt.Errorf("scan SSE: %w", err)
 	}
 	latency := time.Since(start)
+	var ttft time.Duration
+	if !firstDataAt.IsZero() {
+		ttft = firstDataAt.Sub(start)
+	}
 
 	res := Result{
-		Prompt:   prompt,
-		Provider: resp.Header.Get("X-LLMRouter-Provider"),
-		Model:    resp.Header.Get("X-LLMRouter-Model"),
-		CacheHit: resp.Header.Get("X-LLMRouter-Cache") == "HIT",
-		CostUSD:  costUSD,
-		Latency:  latency,
+		Prompt:       prompt,
+		ResponseText: text.String(),
+		Provider:     resp.Header.Get("X-LLMRouter-Provider"),
+		Model:        resp.Header.Get("X-LLMRouter-Model"),
+		CacheHit:     resp.Header.Get("X-LLMRouter-Cache") == "HIT",
+		CostUSD:      costUSD,
+		Latency:      latency,
+		TTFT:         ttft,
 	}
 	if v := resp.Header.Get("X-LLMRouter-Similarity"); v != "" {
 		res.Similarity, _ = strconv.ParseFloat(v, 64)
@@ -266,16 +376,22 @@ func scrapeCostSaved(baseURL string) (float64, error) {
 func summarize(results []Result, costSaved float64, wallTime time.Duration) {
 	var hits, misses int
 	var actualCost float64
-	var hitLat, missLat []time.Duration
+	var hitLat, missLat, hitTTFT, missTTFT []time.Duration
+	missByModel := map[string]int{}
+	missCostByModel := map[string]float64{}
 
 	for _, r := range results {
 		if r.CacheHit {
 			hits++
 			hitLat = append(hitLat, r.Latency)
+			hitTTFT = append(hitTTFT, r.TTFT)
 		} else {
 			misses++
 			missLat = append(missLat, r.Latency)
+			missTTFT = append(missTTFT, r.TTFT)
 			actualCost += r.CostUSD
+			missByModel[r.Model]++
+			missCostByModel[r.Model] += r.CostUSD
 		}
 	}
 
@@ -301,6 +417,21 @@ func summarize(results []Result, costSaved float64, wallTime time.Duration) {
 		pct(hitLat, 50), pct(hitLat, 95), pct(hitLat, 99))
 	fmt.Printf("Miss latency  p50/p95/p99: %s / %s / %s\n",
 		pct(missLat, 50), pct(missLat, 95), pct(missLat, 99))
+	fmt.Printf("Hit TTFT      p50/p95/p99: %s / %s / %s\n",
+		pct(hitTTFT, 50), pct(hitTTFT, 95), pct(hitTTFT, 99))
+	fmt.Printf("Miss TTFT     p50/p95/p99: %s / %s / %s\n",
+		pct(missTTFT, 50), pct(missTTFT, 95), pct(missTTFT, 99))
+	if len(missByModel) > 0 {
+		models := make([]string, 0, len(missByModel))
+		for m := range missByModel {
+			models = append(models, m)
+		}
+		sort.Strings(models)
+		fmt.Println("Misses by routed model:")
+		for _, m := range models {
+			fmt.Printf("  %-40s %d ($%.4f)\n", m, missByModel[m], missCostByModel[m])
+		}
+	}
 }
 
 func pct(xs []time.Duration, p int) time.Duration {
