@@ -109,7 +109,7 @@ func TestCacheBenchmark(t *testing.T) {
 		t.Fatalf("flush cache: %v", err)
 	}
 
-	savedBefore, err := scrapeCostSaved(baseURL)
+	savingsBefore, err := scrapeSavings(baseURL)
 	if err != nil {
 		t.Fatalf("scrape metrics (before): %v", err)
 	}
@@ -198,12 +198,16 @@ func TestCacheBenchmark(t *testing.T) {
 		}
 	}
 
-	savedAfter, err := scrapeCostSaved(baseURL)
+	savingsAfter, err := scrapeSavings(baseURL)
 	if err != nil {
 		t.Fatalf("scrape metrics (after): %v", err)
 	}
+	delta := Savings{
+		Cache:   savingsAfter.Cache - savingsBefore.Cache,
+		Routing: savingsAfter.Routing - savingsBefore.Routing,
+	}
 
-	summarize(results, savedAfter-savedBefore, time.Since(runStart))
+	summarize(results, delta, time.Since(runStart))
 }
 
 func loadCorpus(path string) (*Corpus, error) {
@@ -343,21 +347,39 @@ func sendRequest(baseURL, model, prompt string, skipCache bool) (Result, error) 
 	return res, nil
 }
 
-// scrapeCostSaved sums the llmrouter_cost_saved_by_cache_usd_total counter
-// across all label combinations. Parses Prometheus text exposition format.
-func scrapeCostSaved(baseURL string) (float64, error) {
+type Savings struct {
+	Cache   float64
+	Routing float64
+}
+
+func (s Savings) Total() float64 { return s.Cache + s.Routing }
+
+// scrapeSavings sums the cache and routing cost-saved counters across all
+// label combinations in a single /metrics scrape.
+func scrapeSavings(baseURL string) (Savings, error) {
 	resp, err := httpClient.Get(baseURL + "/metrics")
 	if err != nil {
-		return 0, err
+		return Savings{}, err
 	}
 	defer resp.Body.Close()
 
-	const metric = "llmrouter_cost_saved_by_cache_usd_total"
-	var total float64
+	const cacheMetric = "llmrouter_cost_saved_by_cache_usd_total"
+	const routingMetric = "llmrouter_cost_saved_by_routing_usd_total"
+
+	var s Savings
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
 		line := scanner.Text()
-		if strings.HasPrefix(line, "#") || !strings.HasPrefix(line, metric) {
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+		var bucket *float64
+		switch {
+		case strings.HasPrefix(line, cacheMetric):
+			bucket = &s.Cache
+		case strings.HasPrefix(line, routingMetric):
+			bucket = &s.Routing
+		default:
 			continue
 		}
 		fields := strings.Fields(line)
@@ -368,12 +390,12 @@ func scrapeCostSaved(baseURL string) (float64, error) {
 		if err != nil {
 			continue
 		}
-		total += v
+		*bucket += v
 	}
-	return total, scanner.Err()
+	return s, scanner.Err()
 }
 
-func summarize(results []Result, costSaved float64, wallTime time.Duration) {
+func summarize(results []Result, savings Savings, wallTime time.Duration) {
 	var hits, misses int
 	var actualCost float64
 	var hitLat, missLat, hitTTFT, missTTFT []time.Duration
@@ -400,9 +422,10 @@ func summarize(results []Result, costSaved float64, wallTime time.Duration) {
 	if total > 0 {
 		hitRate = float64(hits) / float64(total) * 100
 	}
+	totalSaved := savings.Total()
 	savingsRate := 0.0
-	if actualCost+costSaved > 0 {
-		savingsRate = costSaved / (actualCost + costSaved) * 100
+	if actualCost+totalSaved > 0 {
+		savingsRate = totalSaved / (actualCost + totalSaved) * 100
 	}
 
 	fmt.Println()
@@ -411,8 +434,10 @@ func summarize(results []Result, costSaved float64, wallTime time.Duration) {
 	fmt.Printf("Requests:       %d (%d hits, %d misses)\n", total, hits, misses)
 	fmt.Printf("Hit rate:       %.1f%%\n", hitRate)
 	fmt.Printf("Actual cost:    $%.4f\n", actualCost)
-	fmt.Printf("Cost saved:     $%.4f\n", costSaved)
-	fmt.Printf("Savings rate:   %.1f%%\n", savingsRate)
+	fmt.Printf("Cache saved:    $%.4f\n", savings.Cache)
+	fmt.Printf("Routing saved:  $%.4f\n", savings.Routing)
+	fmt.Printf("Total saved:    $%.4f\n", totalSaved)
+	fmt.Printf("Savings rate:   %.1f%%  (vs no-gateway baseline)\n", savingsRate)
 	fmt.Printf("Hit latency   p50/p95/p99: %s / %s / %s\n",
 		pct(hitLat, 50), pct(hitLat, 95), pct(hitLat, 99))
 	fmt.Printf("Miss latency  p50/p95/p99: %s / %s / %s\n",
