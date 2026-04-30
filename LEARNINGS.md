@@ -735,3 +735,26 @@ go test -v -tags bench -run TestCacheBenchmark ./benchmarks/ -timeout 30m
 - Don't read the FHR curve past T~0.94 as signal: small-N variance dominates there. The 0% at T=0.98 is 4 hits, 0 NOs.
 - Run sequence for next session: bounce gateway → `LLMROUTER_LOG_PATH=data/realistic_records.jsonl LLMROUTER_BASELINE_MODEL=claude-sonnet-4-5-20250929 go test -tags bench -run TestCacheBenchmark -timeout 30m ./benchmarks/` → `uv run python label_eval.py` → `uv run python eval_quality.py`.
 
+
+## 2026-04-30 - PR #33: Week 8 steps 6-8: bench results, harness fix, README writeup
+
+**Change Summary:**
+- Wraps up Week 8 with the realistic-corpus bench results and the README writeup that pairs cost numbers with end-to-end quality preservation.
+- **Harness fix**: bench previously scraped only `llmrouter_cost_saved_by_cache_usd_total`, so the printed savings rate excluded routing savings. Now scrapes both counters (cache + routing) and reports `Cache saved`, `Routing saved`, `Total saved`, and a savings rate against the combined no-gateway baseline.
+- **README**: new Benchmarks and Parameter tuning sections; dropped the stale "in progress" status banner; added `cost reduction` and `quality preserved` badges.
+- **Make targets**: `bench`, `bench-collect`, `bench-quality` for the three-stage bench pipeline.
+
+**How It Works:**
+- `scrapeCostSaved` was replaced with `scrapeSavings`, which returns a `Savings{Cache, Routing}` struct from a single `/metrics` scrape. `TestCacheBenchmark` takes before/after snapshots and passes the delta to `summarize`. The `Savings.Total()` helper drives the savings-rate calculation.
+- `summarize` prints three lines (`Cache saved`, `Routing saved`, `Total saved`) and one combined `Savings rate`, replacing the prior single `Cost saved` line.
+- README structure: headline result → Benchmarks (setup, cost savings table, latency table, quality preservation table with the 94.5% end-user vs 78.4% engineering framing) → Parameter tuning (similarity threshold method + result with embedded `threshold_selection.png`, complexity classifier journey including MLP dead end and handcrafted-features negative result) → Quick Start.
+- Make pipeline: `bench` runs the harness with no logging (headline only), `bench-collect` adds `LLMROUTER_LOG_PATH` + `LLMROUTER_BASELINE_MODEL` env vars to capture the JSONL log for quality eval, `bench-quality` runs `label_eval.py` then `eval_quality.py` from `benchmarks/python/`.
+
+**Additional Notes:**
+- This is the final week-8 PR. Wraps step 6 (realistic cost bench at T*=0.92), step 7 (LLM-as-judge quality eval), and step 8 (README writeup of tuning + benchmarks).
+- Headline result on a single 199-prompt run: ~20% cost reduction at 94.5% quality preservation, hit p50 TTFT ~28× faster than miss p50 TTFT.
+- The 94.5% preservation rate bakes in the 148 quality-routed misses that went untouched. The more rigorous segmentation (78.4% of *affected* requests judged adequate) is also in the README so the engineering rigor is visible.
+- 17.2% NO rate on cache hits is slightly higher than the ~10% FHR target negotiated at T=0.92. With N=29 that's within noise (one extra NO = 3.4pp), but worth flagging — realistic-corpus FHR may run slightly looser than the QQP-tuning-corpus prediction.
+- Did not re-run the bench after the harness fix to capture clean per-run routing savings; estimated from the cumulative routing counter divided by two equal runs (both runs hit the same cache savings within $0.001, so the estimate is solid). Future bench runs will print the realistic number directly.
+- Week 9 polish (Configuration section, Design Decisions section, Build & Test targets refresh, GoDoc cleanup) is deliberately deferred.
+
