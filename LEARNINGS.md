@@ -758,3 +758,27 @@ go test -v -tags bench -run TestCacheBenchmark ./benchmarks/ -timeout 30m
 - Did not re-run the bench after the harness fix to capture clean per-run routing savings; estimated from the cumulative routing counter divided by two equal runs (both runs hit the same cache savings within $0.001, so the estimate is solid). Future bench runs will print the realistic number directly.
 - Week 9 polish (Configuration section, Design Decisions section, Build & Test targets refresh, GoDoc cleanup) is deliberately deferred.
 
+
+## 2026-05-04 - PR #34: Week 9: README polish — header, benchmarks, observability, TUNING.md
+
+**Change Summary:**
+README polish pass for résumé-readiness; no code changes.
+- Centered Ruflo-style header (badges → title → rule → subtitle → explainer); reworded explainer to mention streaming support and a full observability suite
+- Replaced "At a glance" with outcome-led "What llmrouter does" leading on the 20.4% / 94.5% headline
+- Restructured Benchmarks (dropped Latency, dropped 78.4% engineering metric, dropped all `~` symbols)
+- New TUNING.md with cache similarity threshold methodology + full complexity classifier journey
+- Expanded Observability section with metric-category breakdown and Grafana screenshot placeholder
+
+**How It Works:**
+- README is now organized as outcome → mechanism → numbers → ops, in that order: header, "What llmrouter does", Architecture, Benchmarks (Setup / Cost savings / Quality preservation), Observability, Quick Start, API, Build & Test
+- TUNING.md is the methodology companion. Setup table in the README links into anchored sections (`#cache-similarity-threshold` and `#complexity-classifier`) so a reader can drop into the relevant deep-dive
+- Header centering uses `<div align="center">` wrapping the badges + h1 + horizontal rule + subtitle + explainer; the LEARNINGS.md callout sits outside the centered block so the link reads naturally left-aligned
+- The complexity classifier journey in TUNING.md is structured as Phase 1 (MLP dead end) → Phase 2 (GBT: class weighting, F2 over F1, handcrafted features negative result, grid search) → Final model → Takeaways, mirroring the actual decision sequence
+
+**Additional Notes:**
+- Covers Week 9 README tasks from the project plan (README polish, methodology write-up, deeper observability section)
+- Still open for Week 9: repo-side `CLAUDE.md`, ONNX Runtime deployment notes, GoDoc/lint code cleanup, Configuration walkthrough section, Design Decisions section, Grafana screenshot embed
+- The user is treating this as the first of several README polish PRs in the same session — more iteration coming on top
+- The repo name (`llmrouter`) was discussed and intentionally kept; rename was scoped at ~30–45 minutes (mostly module-path find/replace) but deemed not worth the churn right now
+- Engineering note: GitHub's rich diff view shows raw HTML for `<div align="center">` rather than rendering it — preview the file directly to verify centering, not the diff
+
