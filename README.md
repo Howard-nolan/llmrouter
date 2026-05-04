@@ -1,23 +1,32 @@
-# llmrouter
+<div align="center">
 
 ![Cost reduction](https://img.shields.io/badge/cost%20reduction-20.4%25-brightgreen)
 ![Quality preserved](https://img.shields.io/badge/quality%20preserved-94.5%25-brightgreen)
 ![Go](https://img.shields.io/badge/Go-1.23-00ADD8?logo=go&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-An LLM inference gateway in Go with semantic response caching, cost-aware model routing, and token-level streaming observability.
+# llmrouter
+
+---
+
+**LLM inference gateway with semantic caching and cost-aware routing**
+
+An LLM inference gateway in Go with semantic response caching, cost-aware model routing, streaming support, and a full observability suite.
+
+</div>
 
 I document what I learn from each pull request in [**LEARNINGS.md**](./LEARNINGS.md).
 
 ---
 
-## At a glance
+## What llmrouter does
 
-- Unified `/v1/chat/completions` endpoint proxying Google Gemini and Anthropic Claude
-- Semantic caching via in-process ONNX embeddings + Redis cosine similarity search
-- Cost-aware routing: classifies prompt complexity, picks cheap or expensive model accordingly
-- Full SSE streaming with tee-based cache write-through
-- Prometheus metrics: request rates, TTFT, inter-token latency, cache hit ratio, cost tracking
+**Cuts LLM API cost by 20.4% while preserving 94.5% of end-user response quality** on a 199-prompt realistic-distribution benchmark. llmrouter sits in front of Anthropic Claude and Google Gemini behind a unified OpenAI-compatible endpoint, and:
+
+- **Caches semantically similar responses** — in-process ONNX embeddings + Redis cosine similarity search. Paraphrased and repeat prompts return in ~52ms p50, roughly 28× faster than a fresh model call.
+- **Routes by prompt complexity** — a gradient-boosted classifier scores each prompt and sends easy ones to a cheap model, hard ones to the expensive model.
+- **Streams tokens end-to-end** — tee pattern writes through to cache while delivering SSE to the client.
+- **Emits full observability** — 17 Prometheus collectors covering request rate, TTFT, inter-token latency, cache hit ratio, and per-model cost, with a 13-panel Grafana dashboard out of the box.
 
 ---
 
