@@ -782,3 +782,22 @@ README polish pass for résumé-readiness; no code changes.
 - The repo name (`llmrouter`) was discussed and intentionally kept; rename was scoped at ~30–45 minutes (mostly module-path find/replace) but deemed not worth the churn right now
 - Engineering note: GitHub's rich diff view shows raw HTML for `<div align="center">` rather than rendering it — preview the file directly to verify centering, not the diff
 
+
+## 2026-05-06 - PR #35: Week 9: README polish pass #2 — API spec, Grafana screenshot, TRAINING_AND_TUNING.md
+
+**Change Summary:**
+- **Full API reference** for `POST /v1/chat/completions` — request body fields, all request/response headers with exact values and emit conditions, streaming vs non-streaming response shapes, error code table with triggers.
+- **Two small bug fixes**: `Usage` struct lacked JSON tags (shipped `PromptTokens` instead of `prompt_tokens`, inconsistent with the streaming shape); `X-Route`/`X-Provider` headers were silently no-op'd when model was pinned (now 400).
+- **Grafana dashboard screenshot** added to Observability section; Quick Start and Build & Test sections expanded with make targets, API key setup, and bench harness usage.
+- **`TUNING.md` → `TRAINING_AND_TUNING.md`**: classifier section moved above cache threshold (more interesting story leads), handcrafted-features section condensed to one paragraph, classifier story tightened to the three-beat arc (MLP → GBT → conservative quality-first router).
+
+**How It Works:**
+**API spec** was grounded in a full codebase audit before writing — every field, header, and error code verified against `handler.go`, `provider.go`, and `stream.go`. Notable findings documented: `cost_usd` intentionally lives in the response body (not headers) because headers can't be set mid-stream; upstream 401/403 map to 502 (gateway misconfiguration, not client auth failure); `X-Cache: only` returns 404 on miss.
+
+**Validation fix** (`handler.go:356–374`): after reading `X-Route`/`X-Provider` headers and decoding the request body, a guard checks `req.Model != "auto"` and returns 400 with a descriptive message naming the pinned model. Applied to both headers for consistency.
+
+**JSON tag fix** (`provider.go:82–86`): added `json:"prompt_tokens"` etc. to the `Usage` struct so non-streaming responses match the `sseUsage` wire format used in streaming chunks.
+
+**Additional Notes:**
+Week 9, PR #35. Remaining Week 9 items still open: Configuration section in README (config.yaml walkthrough), Design Decisions section, repo-side `CLAUDE.md`, ONNX Runtime deployment doc, code cleanup (GoDoc, golangci-lint).
+
