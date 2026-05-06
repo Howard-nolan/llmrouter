@@ -125,6 +125,8 @@ export GOOGLE_API_KEY=...      # https://aistudio.google.com/apikey
 export ANTHROPIC_API_KEY=...   # https://console.anthropic.com/settings/keys
 ```
 
+**Prerequisites:** `libonnxruntime.dylib` (macOS) or `libonnxruntime.so` (Linux) must be present at runtime — it's loaded dynamically, not bundled in the binary. Download from [ONNX Runtime releases](https://github.com/microsoft/onnxruntime/releases) and place it in `./lib/`, or set `ONNXRUNTIME_LIB_PATH` in your environment. The HuggingFace tokenizer (`libtokenizers.a`) is statically linked and needs no extra setup.
+
 Start the gateway. `make run` boots the Docker stack (Redis + Prometheus + Grafana) and the Go gateway in one step:
 ```bash
 make run    # gateway on :8080, metrics scraped at :9090
@@ -158,45 +160,39 @@ The primary endpoint. Accepts an OpenAI-compatible JSON body and returns either 
 ```json
 {
   "model": "auto",
-  "messages": [
-    {"role": "user", "content": "Explain TCP handshake"}
-  ],
+  "messages": [{"role": "user", "content": "Explain TCP handshake"}],
   "stream": true,
   "max_tokens": 1024
 }
 ```
 
-**`model`** (string, required) — Either a registered model name (e.g. `gemini-2.0-flash`, `claude-sonnet-4-5-20250929`) or the literal `"auto"`. When `"auto"`, llmrouter computes a complexity score for the prompt and picks `cheap_model` or `quality_model` from the routing config based on `complexity_threshold`. Pinning a concrete model skips routing entirely; the cache is still consulted if enabled.
+| Field | Type | Notes |
+|-------|------|-------|
+| `model` | string, required | Registered model name (e.g. `gemini-2.0-flash`) or `"auto"`. `"auto"` triggers complexity-based routing; pinned model skips routing, cache still applies. |
+| `messages` | array, required | `[{"role": "user\|system\|assistant", "content": "..."}]`. Requires at least one `user` message. Only the last user message is embedded for cache lookup. |
+| `stream` | bool | `true` → SSE stream; `false` (default) → single JSON response. |
+| `max_tokens` | int | Forwarded to the provider. Required by Anthropic's API; not enforced by llmrouter. |
 
-**`messages`** (array, required) — Standard OpenAI message list. Each entry has `role` (`"system"`, `"user"`, or `"assistant"`) and `content` (plain text). At least one `user` message is required, otherwise the gateway returns 400. Only the **last user message** is used for embedding and cache lookup — embedding the full conversation causes spurious misses on minor prefix changes.
-
-**`stream`** (bool, optional, default `false`) — When `true`, the response is an SSE stream. When `false` or omitted, the response is a single JSON object.
-
-**`max_tokens`** (int, optional) — Forwarded to the upstream provider unchanged. Anthropic's API requires this field; Google's does not. llmrouter does not enforce it.
-
-Unknown JSON fields are silently dropped. Sampling parameters like `temperature`, `top_p`, `frequency_penalty`, and `stop` are not currently plumbed through — sending them is harmless but they have no effect.
+Unknown fields and sampling params (`temperature`, `top_p`, etc.) are silently dropped.
 
 #### Request headers
 
-All optional. These control infrastructure behavior, not model parameters.
+All optional — these control gateway behavior, not model parameters.
 
-**`X-Cache`** — `auto` (default), `skip`, or `only`.
-- `auto` — look up on read, store on write.
-- `skip` — bypass the cache entirely; always call the provider, do not write the result back.
-- `only` — lookup-only mode. On a cache miss, the gateway returns `404 Not Found` with `{"error": "cache miss (x-cache: only)"}` instead of calling the provider. Used by the bench harness for hit-only replay.
-
-**`X-Route`** — `auto`, `cheapest`, or `quality`. Overrides `routing.default_strategy` from config. Only valid when `model="auto"`. Unknown values return 400; sending this header with a pinned model also returns 400 (rather than silently no-op'ing).
-
-**`X-Provider`** — `google`, `anthropic`, etc. Overrides `routing.default_provider` from config. Only valid when `model="auto"`. Unknown providers return 400; sending this header with a pinned model also returns 400.
+| Header | Values | Notes |
+|--------|--------|-------|
+| `X-Cache` | `auto` (default), `skip`, `only` | `auto` = lookup + store on miss; `skip` = bypass entirely; `only` = 404 instead of calling provider on miss. |
+| `X-Route` | `auto` (default), `cheapest`, `quality` | Only valid with `model="auto"`. Returns 400 on unknown value or pinned model. |
+| `X-Provider` | `google`, `anthropic` | Only valid with `model="auto"`. Returns 400 on unknown provider or pinned model. |
 
 #### Response headers
 
-Set on every successful response (streaming and non-streaming, hits and misses):
-
-- **`X-LLMRouter-Cache`** — `HIT` or `MISS`.
-- **`X-LLMRouter-Provider`** — `google`, `anthropic`, etc. On cache hits, this is the provider that originally generated the cached response.
-- **`X-LLMRouter-Model`** — actual model used. After auto-routing, this reflects the routed-to model.
-- **`X-LLMRouter-Similarity`** — only on cache hits. Cosine similarity of the matched entry, formatted to four decimal places (e.g. `0.9542`).
+| Header | Value | Notes |
+|--------|-------|-------|
+| `X-LLMRouter-Cache` | `HIT` or `MISS` | Set on every response. |
+| `X-LLMRouter-Provider` | `google`, `anthropic` | On cache hits, reflects the provider that generated the cached response. |
+| `X-LLMRouter-Model` | model name | After auto-routing, reflects the routed-to model. |
+| `X-LLMRouter-Similarity` | e.g. `0.9542` | Cache hits only. Cosine similarity of the matched entry. |
 
 
 ## Build & Test
