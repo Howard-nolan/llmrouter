@@ -801,3 +801,16 @@ README polish pass for résumé-readiness; no code changes.
 **Additional Notes:**
 Week 9, PR #35. Remaining Week 9 items still open: Configuration section in README (config.yaml walkthrough), Design Decisions section, repo-side `CLAUDE.md`, ONNX Runtime deployment doc, code cleanup (GoDoc, golangci-lint).
 
+
+## 2026-05-06 - PR #36: Week 9: tighten API tables, add ONNX prereq note
+
+**Change Summary:**
+- Converted the `POST /v1/chat/completions` request body, request headers, and response headers from prose paragraphs into scannable tables.
+- Added an ONNX Runtime prerequisite callout in Quick Start: `libonnxruntime.dylib`/`.so` must be present at runtime (dynamic load, not bundled); `libtokenizers.a` is statically linked and needs no extra setup.
+
+**How It Works:**
+Pure documentation change — no code touched. Tables use the same field/value information as the prose they replace; nothing was dropped or added, just reformatted for scannability. The ONNX note links to the ONNX Runtime releases page and calls out the `./lib/` placement convention already used by the Makefile's `CGO_LDFLAGS`.
+
+**Additional Notes:**
+Week 9, PR #36. Remaining open items are deferred: config section, repo CLAUDE.md, code cleanup (GoDoc, lint). The project is otherwise complete.
+
