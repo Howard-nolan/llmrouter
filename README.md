@@ -13,7 +13,7 @@ An LLM inference gateway in Go with semantic response caching, cost-aware model 
 
 </div>
 
-I document what I learn from each pull request in [**LEARNINGS.md**](./LEARNINGS.md).
+👉 I document what I learn from each pull request in [**LEARNINGS.md**](./LEARNINGS.md).
 
 ---
 
@@ -62,8 +62,8 @@ flowchart TD
 | | |
 |---|---|
 | Corpus | 199 prompts across 104 clusters; QQP-derived paraphrases with a power-law cluster-size distribution to mimic real workloads (some questions repeat heavily, others are unique) |
-| Cache threshold | Cosine similarity `T = 0.92` (chosen via [Parameter tuning](./TUNING.md#cache-similarity-threshold)) |
-| Complexity threshold | `0.28`, F2-tuned (chosen via [Parameter tuning](./TUNING.md#complexity-classifier)) |
+| Cache threshold | Cosine similarity `T = 0.92` (chosen via [Training & Tuning](./TRAINING_AND_TUNING.md#cache-similarity-threshold)) |
+| Complexity threshold | `0.28`, F2-tuned (chosen via [Training & Tuning](./TRAINING_AND_TUNING.md#complexity-classifier)) |
 
 ### Cost savings
 
@@ -90,7 +90,7 @@ Methodology: Gemini 2.5 Pro judges each cache-hit and cheap-routed-miss response
 
 *\*Quality-routed misses are preserved by definition — the gateway routed to the baseline model.*
 
-Full methodology behind both thresholds: [TUNING.md](./TUNING.md).
+Full methodology behind both thresholds: [TRAINING\_AND\_TUNING.md](./TRAINING_AND_TUNING.md).
 
 ## Observability
 
@@ -198,83 +198,6 @@ Set on every successful response (streaming and non-streaming, hits and misses):
 - **`X-LLMRouter-Model`** — actual model used. After auto-routing, this reflects the routed-to model.
 - **`X-LLMRouter-Similarity`** — only on cache hits. Cosine similarity of the matched entry, formatted to four decimal places (e.g. `0.9542`).
 
-Cost is **not** exposed as a response header. HTTP headers can't be set after a streaming response body has started, so cost lives in the body for non-streaming requests and in the final SSE chunk for streaming requests (see below).
-
-#### Non-streaming response
-
-```json
-{
-  "id": "msg_01ABC...",
-  "model": "claude-haiku-4-5-20251001",
-  "content": "The TCP three-way handshake is...",
-  "usage": {
-    "prompt_tokens": 18,
-    "completion_tokens": 142,
-    "total_tokens": 160
-  },
-  "cost_usd": 0.000582
-}
-```
-
-`cost_usd` is computed by the gateway as `(prompt_tokens × input_price + completion_tokens × output_price) / 1,000,000`, using the per-model rates from `config.costs`. If a model has no entry in the cost table, the field is omitted.
-
-#### Streaming response
-
-When `stream: true` the response is `text/event-stream` with chunks in OpenAI `ChatCompletionChunk` format:
-
-```
-data: {"id":"msg_01ABC...","object":"chat.completion.chunk","model":"claude-haiku-4-5-20251001","choices":[{"index":0,"delta":{"content":"The"},"finish_reason":null}]}
-
-data: {"id":"msg_01ABC...","object":"chat.completion.chunk","model":"claude-haiku-4-5-20251001","choices":[{"index":0,"delta":{"content":" TCP"},"finish_reason":null}]}
-
-...
-
-data: {"id":"msg_01ABC...","object":"chat.completion.chunk","model":"claude-haiku-4-5-20251001","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":18,"completion_tokens":142,"total_tokens":160},"cost_usd":0.000582}
-
-data: [DONE]
-```
-
-`usage` and `cost_usd` appear only on the **final** chunk (the one with `finish_reason: "stop"`). The literal `data: [DONE]` terminates the stream — clients should treat it as end-of-stream rather than parse it as JSON. Cache hits replay as a single content chunk plus the final-stats chunk; the wire format is identical to a live stream.
-
-#### Errors
-
-Errors return JSON `{"error": "..."}` with one of these status codes:
-
-| Status | Trigger                                                                                                                          |
-| ------ | -------------------------------------------------------------------------------------------------------------------------------- |
-| 400    | Malformed JSON, missing user message, unknown model, unknown routing strategy, unknown provider, `model="auto"` with no router, `X-Route` or `X-Provider` set on a pinned model. |
-| 404    | `X-Cache: only` and the request missed the cache.                                                                                |
-| 429    | Upstream provider rate-limited the request.                                                                                      |
-| 500    | Embedding model failed during auto-routing.                                                                                      |
-| 502    | Upstream provider returned 4xx (auth, bad request) or 5xx.                                                                       |
-| 504    | Upstream provider timed out.                                                                                                     |
-
-Upstream `401`/`403` are mapped to `502 Bad Gateway` — they signal a gateway misconfiguration (bad API key in `config.yaml`), not a client auth failure.
-
-### `GET /cache/stats`
-
-```json
-{
-  "hits": 247,
-  "misses": 1053,
-  "entries": 142,
-  "avg_similarity": 0.9523
-}
-```
-
-`hits` and `misses` are atomic counters; `misses` includes both `skip` and `only`-mode misses. `entries` is read live from Redis (defaults to 0 if Redis is unreachable). `avg_similarity` is the running mean of similarity scores over all cache hits in the lifetime of the process. Returns `503` with `{"error": "cache is not enabled"}` if caching is disabled in config.
-
-### `POST /cache/flush`
-
-Empty request body. On success returns `{"status": "flushed"}` and resets all counters. Returns `503` if caching is disabled, `500` if the underlying Redis flush fails.
-
-### `GET /health`
-
-Returns `{"status": "ok"}`. Currently a process-liveness probe only — no upstream connectivity check.
-
-### `GET /metrics`
-
-Standard Prometheus exposition format. Consumed by the local Prometheus instance, which feeds the Grafana dashboard.
 
 ## Build & Test
 
