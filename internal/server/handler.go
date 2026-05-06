@@ -353,6 +353,28 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	xRoute := r.Header.Get("X-Route")       // "auto", "cheapest", "quality"
 	xProvider := r.Header.Get("X-Provider") // "google", "anthropic"
 
+	// Reject routing controls on pinned models. X-Route and X-Provider
+	// only have meaning when model="auto"; silently ignoring them on a
+	// pinned model hides client misconfiguration.
+	if req.Model != "auto" && req.Model != "" {
+		if xRoute != "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error": fmt.Sprintf("X-Route header has no effect when model is pinned (%q); set model to \"auto\" to enable routing", req.Model),
+			})
+			return
+		}
+		if xProvider != "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error": fmt.Sprintf("X-Provider header has no effect when model is pinned (%q); set model to \"auto\" to enable routing", req.Model),
+			})
+			return
+		}
+	}
+
 	// Step 2: Compute embedding.
 	// The embedding is needed for both cache lookup and auto-routing, so
 	// we compute it whenever an embedder is available — not just when

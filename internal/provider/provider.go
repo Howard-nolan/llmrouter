@@ -80,9 +80,9 @@ type ChatResponse struct {
 // form — we normalize it here. These numbers feed into cost calculation
 // (tokens × price-per-token) and Prometheus metrics.
 type Usage struct {
-	PromptTokens     int // tokens in the input (our request)
-	CompletionTokens int // tokens in the output (model's response)
-	TotalTokens      int // sum of the above
+	PromptTokens     int `json:"prompt_tokens"`     // tokens in the input (our request)
+	CompletionTokens int `json:"completion_tokens"` // tokens in the output (model's response)
+	TotalTokens      int `json:"total_tokens"`      // sum of the above
 }
 
 // StreamChunk is one piece of a streaming response. The provider adapter
