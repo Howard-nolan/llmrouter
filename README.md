@@ -5,7 +5,7 @@
 ![Go](https://img.shields.io/badge/Go-1.23-00ADD8?logo=go&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-# llmrouter
+# LLM Router
 
 **LLM inference gateway with semantic caching and cost-aware routing**
 
@@ -17,7 +17,7 @@ An LLM inference gateway in Go with semantic response caching, cost-aware model 
 
 ---
 
-## What llmrouter does
+## What LLM Router does
 
 **Cuts LLM API cost by 20.4% while preserving 94.5% of end-user response quality** on a 199-prompt realistic-distribution benchmark. llmrouter sits in front of Anthropic Claude and Google Gemini behind a unified OpenAI-compatible endpoint, and:
 
