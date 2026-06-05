@@ -19,7 +19,7 @@ An LLM inference gateway in Go with semantic response caching, cost-aware model 
 
 ## What LLM Router does
 
-**Cuts LLM API cost by 20.4% while preserving 94.5% of end-user response quality** on a 199-prompt realistic-distribution benchmark. llmrouter sits in front of Anthropic Claude and Google Gemini behind a unified OpenAI-compatible endpoint, and:
+**Cuts LLM API cost by 20.4% while preserving 94.5% of end-user response quality** on a 199-prompt realistic-distribution benchmark. LLM Router sits in front of Anthropic Claude and Google Gemini behind a unified OpenAI-compatible endpoint, and:
 
 - **Routes by prompt complexity** — a gradient-boosted classifier scores each prompt and sends easy ones to a cheap model, hard ones to the expensive model.
 - **Caches semantically similar responses** — in-process ONNX embeddings + Redis cosine similarity search. Paraphrased and repeat prompts return in 52ms p50, 28× faster than a fresh model call.
@@ -94,7 +94,7 @@ Full methodology behind both thresholds: [TRAINING\_AND\_TUNING.md](./TRAINING_A
 
 ## Observability
 
-llmrouter ships with a 17-collector Prometheus suite and a 13-panel Grafana dashboard preprovisioned via `docker-compose`. Bring up the local stack and the dashboard is live with no extra setup.
+LLM Router ships with a 17-collector Prometheus suite and a 13-panel Grafana dashboard preprovisioned via `docker-compose`. Bring up the local stack and the dashboard is live with no extra setup.
 
 ```bash
 docker-compose up -d
@@ -171,7 +171,7 @@ The primary endpoint. Accepts an OpenAI-compatible JSON body and returns either 
 | `model` | string, required | Registered model name (e.g. `gemini-2.0-flash`) or `"auto"`. `"auto"` triggers complexity-based routing; pinned model skips routing, cache still applies. |
 | `messages` | array, required | `[{"role": "user\|system\|assistant", "content": "..."}]`. Requires at least one `user` message. Only the last user message is embedded for cache lookup. |
 | `stream` | bool | `true` → SSE stream; `false` (default) → single JSON response. |
-| `max_tokens` | int | Forwarded to the provider. Required by Anthropic's API; not enforced by llmrouter. |
+| `max_tokens` | int | Forwarded to the provider. Required by Anthropic's API; not enforced by LLM Router. |
 
 Unknown fields and sampling params (`temperature`, `top_p`, etc.) are silently dropped.
 
